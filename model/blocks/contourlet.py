@@ -259,6 +259,6 @@ class ContourletTransform(nn.Module):
         """
         pyramid, laplacian = self.lp(x=x)
         subbands = []
-        for i in range(self.num_levels):
-            subbands.append(self.dfb(x=laplacian[i]))
-        return
+        for l in laplacian:
+            subbands.append(self.dfb(l))
+        return pyramid, subbands
