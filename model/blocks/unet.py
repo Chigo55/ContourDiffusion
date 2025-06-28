@@ -26,10 +26,6 @@ class SWISH(nn.Sigmoid):
 
 
 class TimeEmbeddingBlock(nn.Module):
-    """
-    Time embedding module that projects time steps into a higher-dimensional space.
-    This module uses sinusoidal functions to create embeddings for time steps.
-    """
     def __init__(self, in_channels, out_channels):
         """
         Initialize the time embedding module.
@@ -47,16 +43,19 @@ class TimeEmbeddingBlock(nn.Module):
         self.act = SWISH()
 
     def get_timestep_embedding(self, t, embed_dim):
-        """        Generate sinusoidal embeddings for the given time steps.
+        """
+        Generate sinusoidal embeddings for the given time steps.
+
         Args:
             t (torch.Tensor): Input tensor representing time steps.
-            embed_dim (int): Dimension of the embedding space.
+            embed_dim (int): Dim of the embedding space.
+
         Returns:
             torch.Tensor: Sinusoidal embeddings for the time steps.
         """
         half_dim = embed_dim // 2
-        exponent = -math.log(x=10000) / (half_dim - 1)
-        freqs = torch.exp(input=torch.arange(end=half_dim, dtype=torch.float32) * exponent)
+        exponent = -math.log(10000) / (half_dim - 1)
+        freqs = torch.exp(input=torch.arange(end=half_dim, dtype=torch.float32, device=t.device) * exponent)
         args = t[:, None].float() * freqs[None, :]
         emb = torch.cat(tensors=[torch.sin(input=args), torch.cos(input=args)], dim=1)
         return emb
@@ -78,32 +77,30 @@ class TimeEmbeddingBlock(nn.Module):
         return t_emb
 
 
-class ResBlock(nn.Module):
-    """
-    A basic ResNet block with two convolutional layers.
-    This block is used to learn residual mappings.
-    """
-    def __init__(self, in_channels, out_channels, shortcut=False, dropout=0.2, temb_dimension=512):
+class ResnetBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, temb_dim, dropout, shortcut=False):
         """
-        Initialize the ResNet block.
+        Initialize the residual block.
 
         Args:
             in_channels (int): Number of input channels.
             out_channels (int): Number of output channels.
-            shortcut (bool): Whether to use a shortcut connection. Default is False.
-            dropout (float): Dropout rate. Default is 0.2.
-            temb_dimension (int): Number of channels in the time embedding. Default is 512.
+            temb_dim (int): Dimension of the time embedding.
+            dropout (float): Dropout rate.
+            shortcut (bool): Whether to use a shortcut connection.
         """
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
+        self.temb_dim = temb_dim
+        self.dropout = dropout
         self.shortcut = shortcut
 
         self.gn1 = nn.GroupNorm(num_groups=32, num_channels=in_channels, eps=1e-6, affine=True)
         self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=3, stride=1, padding=1)
         self.act1 = SWISH()
 
-        self.temb_proj = TimeEmbeddingBlock(in_channels=temb_dimension, out_channels=out_channels)
+        self.temb_proj = TimeEmbeddingBlock(in_channels=temb_dim, out_channels=out_channels)
 
         self.gn2 = nn.GroupNorm(num_groups=32, num_channels=out_channels, eps=1e-6, affine=True)
         self.act2 = SWISH()
@@ -114,15 +111,26 @@ class ResBlock(nn.Module):
             if self.shortcut:
                 self.conv_shortcut = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=3, stride=1, padding=1)
             else:
-                self.nin_shortcut = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=1, stride=1, padding=0)
+                self.nein_shortcut = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=1, stride=1, padding=0)
 
-    def forward(self, x, temb):
+    def forward(self, x, t):
+        """
+        Forward pass of the residual block.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (B, C, H, W).
+            t (torch.Tensor): Time step tensor of shape (B, 1).
+
+        Returns:
+            torch.Tensor: Output tensor after applying the residual block.
+        """
         h = x
         h = self.gn1(h)
         h = self.act1(h)
         h = self.conv1(h)
 
-        h = h + self.temb_proj(self.act1(temb))[:, :, None, None]
+        t_emb = self.temb_proj(t)
+        h = h + t_emb[:, :, None, None]
 
         h = self.gn2(h)
         h = self.act2(h)
@@ -133,47 +141,68 @@ class ResBlock(nn.Module):
             if self.shortcut:
                 x = self.conv_shortcut(x)
             else:
-                x = self.nin_shortcut(x)
+                x = self.nein_shortcut(x)
         return x+h
 
 
 class AttentionBlock(nn.Module):
-    """
-    Attention block that applies self-attention to the input tensor.
-    This block is used to capture long-range dependencies in the data.
-    """
-    def __init__(self, in_channels):
+    def __init__(self, dim):
         """
         Initialize the attention block.
 
         Args:
-            in_channels (int): Number of input channels.
+            dim (int): Number of input channels.
         """
         super().__init__()
-        self.in_channels = in_channels
-        self.norm = nn.GroupNorm(num_groups=32, num_channels=in_channels, eps=1e-6, affine=True)
-        self.qkv = nn.Conv2d(in_channels=in_channels, out_channels=in_channels * 3, kernel_size=1, stride=1, padding=0)
-        self.proj_out = nn.Conv2d(in_channels=in_channels, out_channels=in_channels, kernel_size=1, stride=1, padding=0)
+        self.dim = dim
+        self.scale = self.dim ** 0.5
+        self.norm = nn.GroupNorm(num_groups=32, num_channels=dim, eps=1e-6, affine=True)
+        self.qkv = nn.Conv2d(in_channels=dim, out_channels=dim * 3, kernel_size=1, stride=1, padding=0)
+        self.proj_out = nn.Conv2d(in_channels=dim, out_channels=dim, kernel_size=1, stride=1, padding=0)
+
+    def _reshape(self, x):
+        """
+        Reshape the input tensor for multi-head attention.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (B, C, H, W).
+
+        Returns:
+            tuple: Tuple containing query, key, and value tensors.
+        """
+        B, C, H, W = x.shape
+        x = x.view(B, 3, self.dim, H * W)
+        x = x.permute(0, 1, 3, 2)
+        q, k, v = x.chunk(chunks=3, dim=1)
+        return q, k, v
 
     def forward(self, x):
+        """
+        Forward pass of the attention block.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (B, C, H, W).
+
+        Returns:
+            torch.Tensor: Output tensor after applying attention.
+        """
+        B, C, H, W = x.shape
         h = x
         h = self.norm(h)
-        qkv = self.qkv(h).reshape(shape=(h.shape[0], 3, self.in_channels, h.shape[2] * h.shape[3]))
-        q, k, v = qkv.chunk(chunks=3, dim=1)
+        qkv = self.qkv(h)
+        q, k, v = self._reshape(qkv)
 
-        attention = (q.transpose(2, 3) @ k) * (self.in_channels ** -0.5)
-        attention = F.softmax(attention, dim=-1)
+        attn = torch.matmul(input=q, other=k.transpose(-1, -2)) / self.scale
+        attn = F.softmax(input=attn, dim=-1)
+        attn = torch.matmul(input=attn, other=v)
 
-        out = (attention @ v.transpose(2, 3)).transpose(2, 3).reshape(shape=h.shape)
+        out = attn.permute(0, 1, 3, 2).contiguous()
+        out = out.view(B, self.dim, H, W)
         out = self.proj_out(out)
         return x + out
 
 
 class Downsample(nn.Module):
-    """
-    Downsample block that reduces the spatial dimensions of the input tensor.
-    This block uses a convolutional layer with stride 2 to downsample the input.
-    """
     def __init__(self, in_channels, trainable=True):
         """
         Initialize the downsample block.
@@ -191,15 +220,14 @@ class Downsample(nn.Module):
 
     def forward(self, x):
         if self.trainable:
-            return self.conv(x)
+            x = self.conv(x)
+            return x
         else:
-            return self.avg_pool(x)
+            x = self.avg_pool(x)
+            return x
+
 
 class Upsample(nn.Module):
-    """
-    Upsample block that increases the spatial dimensions of the input tensor.
-    This block uses a transposed convolutional layer to upsample the input.
-    """
     def __init__(self, in_channels, trainable=True):
         """
         Initialize the upsample block.
@@ -215,93 +243,102 @@ class Upsample(nn.Module):
 
     def forward(self, x):
         if self.trainable:
-            return self.conv(x)
+            x = F.interpolate(input=x, scale_factor=2.0, mode="nearest")
+            x = self.conv(x)
+            return x
         else:
-            return torch.nn.functional.interpolate(input=x, scale_factor=2.0, mode="nearest")
+            x = F.interpolate(input=x, scale_factor=2.0, mode="nearest")
+            return x
 
 
-class DiffusionUNet(nn.Module):
-    """
-    A simple UNet architecture for diffusion models.
-    This class defines the structure of the UNet, including downsampling and upsampling blocks.
-    """
-    def __init__(self, in_channels, out_channels, base_channels, resolution, num_blocks, multiply, shortcut, trainable, dropout):
+class UNet(nn.Module):
+    def __init__(self, in_channels, out_channels, hidden_channels, num_levels, temb_dim, dropout, shortcut, trainable):
         """
-        Initialize the DiffusionUNet.
+        Initialize the UNet.
 
         Args:
-            in_channels (int): Number of input channels. Default is 3 (RGB).
-            out_channels (int): Number of output channels. Default is 3 (RGB).
-            base_channels (int): Base number of channels for the first layer. Default is 64.
+            in_channels (int): Number of input channels.
+            out_channels (int): Number of output channels.
+            hidden_channels (int): Number of hidden channels.
+            num_levels (int): Number of levels in the UNet architecture.
+            temb_dim (int): Dimension of the time embedding.
+            dropout (float): Dropout rate.
+            shortcut (bool): Whether to use shortcut connections in the residual blocks.
+            trainable (bool): Whether the downsample and upsample blocks are trainable.
         """
         super().__init__()
-        self.in_conv = nn.Conv2d(in_channels=in_channels, out_channels=base_channels, kernel_size=3, stride=1, padding=1)
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.hidden_channels = hidden_channels
+        self.num_levels = num_levels
+        self.dropout = dropout
+        self.shortcut = shortcut
+        self.trainable = trainable
 
-        in_ch = 0
-        in_multiply = (1,)+multiply
-        self.down = nn.ModuleList()
-        for i_level in range(resolution):
-            resnet = nn.ModuleList()
-            attention = nn.ModuleList()
-            in_ch = base_channels * in_multiply[i_level]
-            out_ch = base_channels * multiply[i_level]
-            for i_block in range(num_blocks):
-                resnet.append(module=ResBlock(in_channels=in_ch, out_channels=out_ch, temb_dimension=base_channels * 4, dropout=dropout, shortcut=shortcut))
-                in_ch = out_ch
-                if i_level == 2:
-                    attention.append(module=AttentionBlock(in_channels=in_ch))
+        self.in_conv = nn.Conv2d(in_channels=in_channels, out_channels=hidden_channels, kernel_size=3, stride=1, padding=1)
 
-            down = nn.Module()
-            down.resnet = resnet
-            down.attention = attention
-            if i_level != self.resolution-1:
-                down.downsample = Downsample(in_channels=in_ch, trainable=trainable)
-            self.down.append(module=down)
+        self.down = nn.ModuleDict()
+        for level in range(1, num_levels + 1):
+            in_ch = hidden_channels * (2 ** (level - 1))
+            out_ch = hidden_channels * (2 ** level)
+            module_list = [
+                ResnetBlock(in_channels=in_ch, out_channels=out_ch, temb_dim=temb_dim, dropout=dropout, shortcut=False),
+                Downsample(in_channels=out_ch, trainable=trainable)
+            ]
 
-        self.mid = nn.Module()
-        self.mid.resnet1 = ResBlock(
-            in_channels=in_ch,
-            out_channels=in_ch,
-            temb_dimension=base_channels * 4,
-            dropout=dropout
-        )
-        self.mid.attention = AttentionBlock(in_channels=in_ch)
-        self.mid.resnet2 = ResBlock(
-            in_channels=in_ch,
-            out_channels=in_ch,
-            temb_dimension=base_channels * 4,
-            dropout=dropout
+            if level % 2 == 1:
+                module_list.insert(1, AttentionBlock(dim=out_ch))
+
+            self.down[f'down{level}'] = nn.ModuleList(modules=module_list)
+
+        self.mid = nn.ModuleList(
+            modules=[
+                ResnetBlock(in_channels=hidden_channels * (2 ** num_levels), out_channels=hidden_channels * (2 ** num_levels), temb_dim=temb_dim, dropout=dropout, shortcut=False),
+                AttentionBlock(dim=hidden_channels * (2 ** num_levels)),
+                ResnetBlock(in_channels=hidden_channels * (2 ** num_levels), out_channels=hidden_channels * (2 ** num_levels), temb_dim=temb_dim, dropout=dropout, shortcut=False)
+            ]
         )
 
-        self.up = nn.ModuleList()
-        for i_level in reversed(range(resolution)):
-            resnet = nn.ModuleList()
-            attention = nn.ModuleList()
-            out_ch = base_channels*multiply[i_level]
-            sk_ch = base_channels*multiply[i_level]
-            for i_block in range(num_blocks+1):
-                if i_block == num_blocks:
-                    sk_ch = base_channels*in_multiply[i_level]
-                resnet.append(module=ResBlock(in_channels=in_ch+sk_ch, out_channels=out_ch, temb_dimension=base_channels * 4, dropout=dropout, shortcut=shortcut))
-                in_ch = out_ch
-                if i_level == 2:
-                    attention.append(module=AttentionBlock(in_channels=in_ch))
+        self.up = nn.ModuleDict()
+        for level in range(num_levels, 0, -1):
+            in_ch = hidden_channels * (2 ** level)
+            out_ch = hidden_channels * (2 ** (level - 1))
+            module_list = [
+                ResnetBlock(in_channels=in_ch, out_channels=out_ch, temb_dim=temb_dim, dropout=dropout, shortcut=False),
+                Upsample(in_channels=out_ch, trainable=trainable)
+            ]
 
-            up = nn.Module()
-            up.resnet = resnet
-            up.attention = attention
-            if i_level != 0:
-                up.upsample = Upsample(in_channels=in_ch, trainable=trainable)
-            self.up.insert(index=0, module=up)
+            if level % 2 == 1:
+                module_list.insert(1, AttentionBlock(dim=out_ch))
 
-        self.out_conv = nn.Conv2d(in_channels=base_channels, out_channels=out_channels, kernel_size=3, stride=1, padding=1)
+            self.up[f'up{level}'] = nn.ModuleList(modules=module_list)
 
-    def forward(self, x):
+        self.out_conv = nn.Conv2d(in_channels=hidden_channels, out_channels=out_channels, kernel_size=3, stride=1, padding=1)
+
+    def forward(self, x, t):
         h = self.in_conv(x)
-        h = self.down1(h)
-        h = self.down2(h)
-        h = self.down3(h)
-        h = self.up1(h)
-        h = self.up2(h)
-        h = self.up3(h)
+
+        # Down path
+        for level in range(1, self.num_levels + 1):
+            for layer in self.down[f'down{level}']:
+                if isinstance(layer, ResnetBlock):
+                    h = layer(h, t)
+                else:
+                    h = layer(h)
+
+        # Mid block
+        for layer in self.mid:
+            if isinstance(layer, ResnetBlock):
+                h = layer(h, t)
+            else:
+                h = layer(h)
+
+        # Up path
+        for level in range(self.num_levels , 0, -1):
+            for layer in self.up[f'up{level}']:
+                if isinstance(layer, ResnetBlock):
+                    h = layer(h, t)
+                else:
+                    h = layer(h)
+
         return self.out_conv(h)
