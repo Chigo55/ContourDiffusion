@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-import math
+import torch.nn.functional as F
 
 
 class DepthSepConvBlock(nn.Module):
@@ -123,14 +123,13 @@ class DilatedResblock(nn.Module):
 
 
 class CrossAttentionBlock(nn.Module):
-    def __init__(self, dim, num_heads, dropout):
+    def __init__(self, dim, num_heads):
         """
         Initializes the CrossAttentionBlock with the given dimension and dropout rate.
 
         Args:
             dim (int): Dimension of the input features.
             num_heads (int): Number of attention heads
-            dropout (float): Dropout rate to apply to the attention weights.
         """
         super().__init__()
         if dim % num_heads != 0:
@@ -144,9 +143,6 @@ class CrossAttentionBlock(nn.Module):
         self.q = DepthSepConvBlock(in_channels=dim, out_channels=dim)
         self.k = DepthSepConvBlock(in_channels=dim, out_channels=dim)
         self.v = DepthSepConvBlock(in_channels=dim, out_channels=dim)
-
-        self.softmax = nn.Softmax(dim=-1)
-        self.attn_dropout = nn.Dropout(p=dropout)
 
     def _reshape_to_heads(self, x):
         """
@@ -184,8 +180,7 @@ class CrossAttentionBlock(nn.Module):
         v = self._reshape_to_heads(x=v)
 
         attn = torch.matmul(input=q, other=k.transpose(-1, -2)) / self.scale
-        attn = self.softmax(attn)
-        attn = self.attn_dropout(attn)
+        attn = F.softmax(attn, dim=-1)
         attn = torch.matmul(input=attn, other=v)
 
         out = attn.permute(0, 1, 3, 2).contiguous()
@@ -230,13 +225,13 @@ class HFRM(nn.Module):
 
         self.cross_attentions0 = self.dilated_blocks = nn.ModuleList(
             modules=[
-                CrossAttentionBlock(dim=out_channels, num_heads=num_heads, dropout=dropout)
+                CrossAttentionBlock(dim=out_channels, num_heads=num_heads)
                 for _ in range(2 ** num_levels)
             ]
         )
         self.cross_attentions0 = self.dilated_blocks = nn.ModuleList(
             modules=[
-                CrossAttentionBlock(dim=out_channels, num_heads=num_heads, dropout=dropout)
+                CrossAttentionBlock(dim=out_channels, num_heads=num_heads)
                 for _ in range(2 ** num_levels)
             ]
         )
