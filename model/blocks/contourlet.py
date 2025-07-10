@@ -7,7 +7,7 @@ import torch.nn.functional as F
 class LaplacianPyramid(nn.Module):
     def __init__(self, num_levels, filter_size, sigma, channels):
         """
-        Initialize the Laplacian Pyramid  module.
+        Initialize the Laplacian Pyramid module.
 
         Args:
             num_levels (int): Number of levels in the Laplacian Pyramid.
@@ -120,7 +120,8 @@ class DirectionalFilterBank(nn.Module):
         return filter
 
     def _highpass_filter(self, lp_filter):
-        """ Apply a high-pass filter to the input tensor.
+        """
+        Apply a high-pass filter to the input tensor.
 
         Args:
             lp_filter (torch.Tensor): Low-pass filter tensor.
@@ -170,10 +171,11 @@ class DirectionalFilterBank(nn.Module):
             torch.Tensor: Sheared tensor.
         """
         B, C, H, W = x.shape
-        shear_matrix_pos = torch.tensor(data=[[1, 1, 0], [0, 1, 0]], dtype=torch.float32)
-        shear_matrix_neg = torch.tensor(data=[[1, -1, 0], [0, 1, 0]], dtype=torch.float32)
-        shear_matrix_pos = shear_matrix_pos.unsqueeze(0).repeat(B, 1, 1)
-        shear_matrix_neg = shear_matrix_neg.unsqueeze(0).repeat(B, 1, 1)
+        device = x.device
+        shear_matrix_pos = torch.tensor(data=[[1, 1, 0], [0, 1, 0]], device=device, dtype=torch.float32)
+        shear_matrix_neg = torch.tensor(data=[[1, -1, 0], [0, 1, 0]], device=device, dtype=torch.float32)
+        shear_matrix_pos = shear_matrix_pos.unsqueeze(dim=0).repeat(B, 1, 1)
+        shear_matrix_neg = shear_matrix_neg.unsqueeze(dim=0).repeat(B, 1, 1)
 
         grid_pos = F.affine_grid(theta=shear_matrix_pos, size=x.size(), align_corners=False)
         grid_neg = F.affine_grid(theta=shear_matrix_neg, size=x.size(), align_corners=False)
