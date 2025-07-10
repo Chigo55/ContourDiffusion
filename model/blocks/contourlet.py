@@ -60,7 +60,7 @@ class LaplacianPyramid(nn.Module):
         c = x
         pyramid, laplacian = [], []
 
-        for i in range(self.num_levels+1):
+        for i in range(self.num_levels):
             p = c
             blurred = F.conv2d(input=c, weight=self.filter, padding=self.filter_size // 2, groups=self.channels)
             down = F.avg_pool2d(input=blurred, kernel_size=2, stride=2)
@@ -249,7 +249,10 @@ class ContourletTransform(nn.Module):
         self.channels = channels
 
         self.lp = LaplacianPyramid(num_levels=num_levels, filter_size=filter_size, sigma=sigma, channels=channels)
-        self.dfb = DirectionalFilterBank(num_levels=num_levels, filter_size=filter_size, sigma=sigma, omega_x=omega_x, omega_y=omega_y, channels=channels)
+        self.dfb = nn.ModuleDict()
+
+        for level in range(1, num_levels + 1):
+            self.dfb[f"dfb{level}"] = DirectionalFilterBank(num_levels=level, filter_size=filter_size, sigma=sigma, omega_x=omega_x, omega_y=omega_y, channels=channels)
 
     def forward(self, x):
         """
@@ -261,6 +264,6 @@ class ContourletTransform(nn.Module):
         """
         pyramid, laplacian = self.lp(x=x)
         subbands = []
-        for l in laplacian:
-            subbands.append(self.dfb(l))
-        return pyramid, subbands
+        for i, l in enumerate(iterable=laplacian, start=1):
+            subbands.append(self.dfb[f"dfb{i}"](l))
+        return pyramid, subbands[::-1]
