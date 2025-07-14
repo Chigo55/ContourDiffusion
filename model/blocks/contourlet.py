@@ -7,7 +7,7 @@ import torch.nn.functional as F
 class LaplacianPyramid(nn.Module):
     def __init__(self, num_levels, filter_size, sigma, channels):
         """
-        Initialize the Laplacian Pyramid  module.
+        Initialize the Laplacian Pyramid module.
 
         Args:
             num_levels (int): Number of levels in the Laplacian Pyramid.
@@ -60,7 +60,7 @@ class LaplacianPyramid(nn.Module):
         c = x
         pyramid, laplacian = [], []
 
-        for i in range(self.num_levels+1):
+        for i in range(self.num_levels):
             p = c
             blurred = F.conv2d(input=c, weight=self.filter, padding=self.filter_size // 2, groups=self.channels)
             down = F.avg_pool2d(input=blurred, kernel_size=2, stride=2)
@@ -120,7 +120,8 @@ class DirectionalFilterBank(nn.Module):
         return filter
 
     def _highpass_filter(self, lp_filter):
-        """ Apply a high-pass filter to the input tensor.
+        """
+        Apply a high-pass filter to the input tensor.
 
         Args:
             lp_filter (torch.Tensor): Low-pass filter tensor.
@@ -170,10 +171,11 @@ class DirectionalFilterBank(nn.Module):
             torch.Tensor: Sheared tensor.
         """
         B, C, H, W = x.shape
-        shear_matrix_pos = torch.tensor(data=[[1, 1, 0], [0, 1, 0]], dtype=torch.float32)
-        shear_matrix_neg = torch.tensor(data=[[1, -1, 0], [0, 1, 0]], dtype=torch.float32)
-        shear_matrix_pos = shear_matrix_pos.unsqueeze(0).repeat(B, 1, 1)
-        shear_matrix_neg = shear_matrix_neg.unsqueeze(0).repeat(B, 1, 1)
+        device = x.device
+        shear_matrix_pos = torch.tensor(data=[[1, 1, 0], [0, 1, 0]], device=device, dtype=torch.float32)
+        shear_matrix_neg = torch.tensor(data=[[1, -1, 0], [0, 1, 0]], device=device, dtype=torch.float32)
+        shear_matrix_pos = shear_matrix_pos.unsqueeze(dim=0).repeat(B, 1, 1)
+        shear_matrix_neg = shear_matrix_neg.unsqueeze(dim=0).repeat(B, 1, 1)
 
         grid_pos = F.affine_grid(theta=shear_matrix_pos, size=x.size(), align_corners=False)
         grid_neg = F.affine_grid(theta=shear_matrix_neg, size=x.size(), align_corners=False)
@@ -247,7 +249,10 @@ class ContourletTransform(nn.Module):
         self.channels = channels
 
         self.lp = LaplacianPyramid(num_levels=num_levels, filter_size=filter_size, sigma=sigma, channels=channels)
-        self.dfb = DirectionalFilterBank(num_levels=num_levels, filter_size=filter_size, sigma=sigma, omega_x=omega_x, omega_y=omega_y, channels=channels)
+        self.dfb = nn.ModuleDict()
+
+        for level in range(1, num_levels + 1):
+            self.dfb[f"dfb{level}"] = DirectionalFilterBank(num_levels=level, filter_size=filter_size, sigma=sigma, omega_x=omega_x, omega_y=omega_y, channels=channels)
 
     def forward(self, x):
         """
@@ -259,6 +264,6 @@ class ContourletTransform(nn.Module):
         """
         pyramid, laplacian = self.lp(x=x)
         subbands = []
-        for l in laplacian:
-            subbands.append(self.dfb(l))
-        return pyramid, subbands
+        for i, l in enumerate(iterable=laplacian, start=1):
+            subbands.append(self.dfb[f"dfb{i}"](l))
+        return pyramid, subbands[::-1]

@@ -316,9 +316,18 @@ class UNet(nn.Module):
         self.out_conv = nn.Conv2d(in_channels=hidden_channels, out_channels=out_channels, kernel_size=3, stride=1, padding=1)
 
     def forward(self, x, t):
+        """
+        Forward pass of the UNet.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (B, C, H, W).
+            t (torch.Tensor): Time step tensor of shape (B, 1).
+
+        Returns:
+            torch.Tensor: Output tensor after applying the UNet.
+        """
         h = self.in_conv(x)
 
-        # Down path
         for level in range(1, self.num_levels + 1):
             for layer in self.down[f'down{level}']:
                 if isinstance(layer, ResnetBlock):
@@ -326,14 +335,12 @@ class UNet(nn.Module):
                 else:
                     h = layer(h)
 
-        # Mid block
         for layer in self.mid:
             if isinstance(layer, ResnetBlock):
                 h = layer(h, t)
             else:
                 h = layer(h)
 
-        # Up path
         for level in range(self.num_levels , 0, -1):
             for layer in self.up[f'up{level}']:
                 if isinstance(layer, ResnetBlock):
