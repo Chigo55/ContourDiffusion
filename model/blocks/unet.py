@@ -8,6 +8,7 @@ class SWISH(nn.Sigmoid):
     def __init__(self, *args, **kwargs):
         """
         Initialize the SWISH activation function.
+
         SWISH is defined as x * sigmoid(x).
         """
         super().__init__(*args, **kwargs)
@@ -219,6 +220,15 @@ class Downsample(nn.Module):
             self.avg_pool = nn.AvgPool2d(kernel_size=2, stride=2)
 
     def forward(self, x):
+        """
+        Forward pass of the downsample block.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (B, C, H, W).
+
+        Returns:
+            torch.Tensor: Output tensor after applying downsample.
+        """
         if self.trainable:
             x = self.conv(x)
             return x
@@ -242,6 +252,15 @@ class Upsample(nn.Module):
             self.conv = nn.Conv2d(in_channels=in_channels, out_channels=in_channels, kernel_size=3, stride=2, padding=1)
 
     def forward(self, x):
+        """
+        Forward pass of the upsample block.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (B, C, H, W).
+
+        Returns:
+            torch.Tensor: Output tensor after applying upsample.
+        """
         if self.trainable:
             x = F.interpolate(input=x, scale_factor=2.0, mode="nearest")
             x = self.conv(x)
@@ -286,13 +305,12 @@ class UNet(nn.Module):
                 Downsample(in_channels=out_ch, trainable=trainable)
             ]
 
-            if level % 2 == 1:
-                module_list.insert(1, AttentionBlock(dim=out_ch))
-
             self.down[f'down{level}'] = nn.ModuleList(modules=module_list)
 
         self.mid = nn.ModuleList(
             modules=[
+                ResnetBlock(in_channels=hidden_channels * (2 ** num_levels), out_channels=hidden_channels * (2 ** num_levels), temb_dim=temb_dim, dropout=dropout, shortcut=False),
+                AttentionBlock(dim=hidden_channels * (2 ** num_levels)),
                 ResnetBlock(in_channels=hidden_channels * (2 ** num_levels), out_channels=hidden_channels * (2 ** num_levels), temb_dim=temb_dim, dropout=dropout, shortcut=False),
                 AttentionBlock(dim=hidden_channels * (2 ** num_levels)),
                 ResnetBlock(in_channels=hidden_channels * (2 ** num_levels), out_channels=hidden_channels * (2 ** num_levels), temb_dim=temb_dim, dropout=dropout, shortcut=False)
@@ -308,14 +326,11 @@ class UNet(nn.Module):
                 Upsample(in_channels=out_ch, trainable=trainable)
             ]
 
-            if level % 2 == 1:
-                module_list.insert(1, AttentionBlock(dim=out_ch))
-
             self.up[f'up{level}'] = nn.ModuleList(modules=module_list)
 
         self.out_conv = nn.Conv2d(in_channels=hidden_channels, out_channels=out_channels, kernel_size=3, stride=1, padding=1)
 
-    def forward(self, x, t):
+    def forward(self, x, t, p, s):
         """
         Forward pass of the UNet.
 
@@ -328,12 +343,12 @@ class UNet(nn.Module):
         """
         h = self.in_conv(x)
 
-        for level in range(1, self.num_levels + 1):
-            for layer in self.down[f'down{level}']:
-                if isinstance(layer, ResnetBlock):
-                    h = layer(h, t)
-                else:
-                    h = layer(h)
+        for i, layer in enumerate(iterable=self.down.values()):
+            if isinstance(layer, ResnetBlock):
+                h = layer(h, t)
+                h = h + p[i]
+            else:
+                h = layer(h)
 
         for layer in self.mid:
             if isinstance(layer, ResnetBlock):
@@ -341,11 +356,11 @@ class UNet(nn.Module):
             else:
                 h = layer(h)
 
-        for level in range(self.num_levels , 0, -1):
-            for layer in self.up[f'up{level}']:
-                if isinstance(layer, ResnetBlock):
-                    h = layer(h, t)
-                else:
-                    h = layer(h)
+        for i, layer in enumerate(iterable=self.down.values()):
+            if isinstance(layer, ResnetBlock):
+                h = layer(h, t)
+                h = h + s[i]
+            else:
+                h = layer(h)
 
         return self.out_conv(h)
