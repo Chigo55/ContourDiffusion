@@ -289,15 +289,15 @@ class UNet(nn.Module):
 
         self.out_conv = nn.Conv2d(in_channels=hidden_channels, out_channels=out_channels, kernel_size=3, stride=1, padding=1)
 
-    def forward(self, x, t, p, s):
+    def forward(self, x, t, p, f):
         h = self.in_conv(x)
 
-        for i, layer in enumerate(iterable=self.down.values()):
-            if isinstance(layer, ResnetBlock):
-                h = layer(h, t)
-                h = h + p[i]
-            else:
-                h = layer(h)
+        for idx, key in enumerate(iterable=self.down):
+            for layer in self.down[key]:
+                if isinstance(layer, ResnetBlock):
+                    h = layer(h, t)
+                else:
+                    h = layer(h)
 
         for layer in self.mid:
             if isinstance(layer, ResnetBlock):
@@ -305,11 +305,12 @@ class UNet(nn.Module):
             else:
                 h = layer(h)
 
-        for i, layer in enumerate(iterable=self.down.values()):
-            if isinstance(layer, ResnetBlock):
-                h = layer(h, t)
-                h = h + s[i]
-            else:
-                h = layer(h)
+        for idx, key in enumerate(iterable=self.up):
+            for layer in self.up[key]:
+                if isinstance(layer, ResnetBlock):
+                    h = h + f[idx]
+                    h = layer(h, t)
+                else:
+                    h = layer(h)
 
         return self.out_conv(h)
