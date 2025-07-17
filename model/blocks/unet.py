@@ -3,26 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-class SWISH(nn.Sigmoid):
-    def __init__(self, *args, **kwargs):
-        """
-        Initialize the SWISH activation function.
-        SWISH is defined as x * sigmoid(x).
-        """
-        super().__init__(*args, **kwargs)
-
-    def forward(self, input):
-        """
-        Apply the SWISH activation function to the input tensor.
-
-        Args:
-            input (torch.Tensor): Input tensor.
-
-        Returns:
-            torch.Tensor: Output tensor after applying SWISH activation.
-        """
-        return input * super().forward(input=input)
+from model.blocks import SWISH
 
 
 class TimeEmbeddingBlock(nn.Module):
@@ -190,7 +171,7 @@ class AttentionBlock(nn.Module):
         h = x
         h = self.norm(h)
         qkv = self.qkv(h)
-        q, k, v = self._reshape(qkv)
+        q, k, v = self._reshape(x=qkv)
 
         attn = torch.matmul(input=q, other=k.transpose(-1, -2)) / self.scale
         attn = F.softmax(input=attn, dim=-1)
@@ -234,7 +215,7 @@ class Upsample(nn.Module):
 
         Args:
             in_channels (int): Number of input channels.
-            trainable (bool): Whether the upsample block is trainable. If False, it uses nearest neighbor interpolation.
+            trainable (bool): Whether the upsample block is trainable. If False, it uses bilinear neighbor interpolation.
         """
         super().__init__()
         self.trainable = trainable
@@ -243,12 +224,11 @@ class Upsample(nn.Module):
 
     def forward(self, x):
         if self.trainable:
-            x = F.interpolate(input=x, scale_factor=2.0, mode="nearest")
+            x = F.interpolate(input=x, scale_factor=2.0, mode="bilinear")
             x = self.conv(x)
-            return x
         else:
-            x = F.interpolate(input=x, scale_factor=2.0, mode="nearest")
-            return x
+            x = F.interpolate(input=x, scale_factor=2.0, mode="bilinear")
+        return x
 
 
 class UNet(nn.Module):
@@ -285,14 +265,12 @@ class UNet(nn.Module):
                 ResnetBlock(in_channels=in_ch, out_channels=out_ch, temb_dim=temb_dim, dropout=dropout, shortcut=False),
                 Downsample(in_channels=out_ch, trainable=trainable)
             ]
-
-            if level % 2 == 1:
-                module_list.insert(1, AttentionBlock(dim=out_ch))
-
             self.down[f'down{level}'] = nn.ModuleList(modules=module_list)
 
         self.mid = nn.ModuleList(
             modules=[
+                ResnetBlock(in_channels=hidden_channels * (2 ** num_levels), out_channels=hidden_channels * (2 ** num_levels), temb_dim=temb_dim, dropout=dropout, shortcut=False),
+                AttentionBlock(dim=hidden_channels * (2 ** num_levels)),
                 ResnetBlock(in_channels=hidden_channels * (2 ** num_levels), out_channels=hidden_channels * (2 ** num_levels), temb_dim=temb_dim, dropout=dropout, shortcut=False),
                 AttentionBlock(dim=hidden_channels * (2 ** num_levels)),
                 ResnetBlock(in_channels=hidden_channels * (2 ** num_levels), out_channels=hidden_channels * (2 ** num_levels), temb_dim=temb_dim, dropout=dropout, shortcut=False)
@@ -307,38 +285,31 @@ class UNet(nn.Module):
                 ResnetBlock(in_channels=in_ch, out_channels=out_ch, temb_dim=temb_dim, dropout=dropout, shortcut=False),
                 Upsample(in_channels=out_ch, trainable=trainable)
             ]
-
-            if level % 2 == 1:
-                module_list.insert(1, AttentionBlock(dim=out_ch))
-
             self.up[f'up{level}'] = nn.ModuleList(modules=module_list)
 
         self.out_conv = nn.Conv2d(in_channels=hidden_channels, out_channels=out_channels, kernel_size=3, stride=1, padding=1)
 
-    def forward(self, x, t):
+    def forward(self, x, t, p, s):
         h = self.in_conv(x)
 
-        # Down path
-        for level in range(1, self.num_levels + 1):
-            for layer in self.down[f'down{level}']:
-                if isinstance(layer, ResnetBlock):
-                    h = layer(h, t)
-                else:
-                    h = layer(h)
+        for i, layer in enumerate(iterable=self.down.values()):
+            if isinstance(layer, ResnetBlock):
+                h = layer(h, t)
+                h = h + p[i]
+            else:
+                h = layer(h)
 
-        # Mid block
         for layer in self.mid:
             if isinstance(layer, ResnetBlock):
                 h = layer(h, t)
             else:
                 h = layer(h)
 
-        # Up path
-        for level in range(self.num_levels , 0, -1):
-            for layer in self.up[f'up{level}']:
-                if isinstance(layer, ResnetBlock):
-                    h = layer(h, t)
-                else:
-                    h = layer(h)
+        for i, layer in enumerate(iterable=self.down.values()):
+            if isinstance(layer, ResnetBlock):
+                h = layer(h, t)
+                h = h + s[i]
+            else:
+                h = layer(h)
 
         return self.out_conv(h)
