@@ -289,7 +289,7 @@ class UNet(nn.Module):
 
         self.out_conv = nn.Conv2d(in_channels=hidden_channels, out_channels=out_channels, kernel_size=3, stride=1, padding=1)
 
-    def forward(self, x, t, p, f):
+    def forward(self, x, t, f):
         h = self.in_conv(x)
 
         for idx, key in enumerate(iterable=self.down):
