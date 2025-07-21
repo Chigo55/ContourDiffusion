@@ -262,17 +262,17 @@ class ContourletTransform(nn.Module):
         self.omega_x = omega_x
         self.omega_y = omega_y
 
-        self.lp = LaplacianPyramid(num_levels=num_levels, filter_size=filter_size, sigma=sigma, in_channels=in_channels)
+        self.lp = LaplacianPyramid(in_channels=in_channels, num_levels=num_levels, filter_size=filter_size, sigma=sigma)
         self.dfb = nn.ModuleDict()
 
         for level in range(1, num_levels + 1):
             self.dfb[f"dfb{level}"] = DirectionalFilterBank(
+                in_channels=in_channels,
                 num_levels=level,
                 filter_size=filter_size,
                 sigma=sigma,
                 omega_x=omega_x,
                 omega_y=omega_y,
-                in_channels=in_channels
             )
 
     def forward(self, x):
