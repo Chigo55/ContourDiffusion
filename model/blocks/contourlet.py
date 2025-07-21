@@ -9,30 +9,30 @@ class LaplacianPyramid(nn.Module):
     LaplacianPyramid constructs a multi-resolution Laplacian pyramid from an image tensor.
 
     Args:
+        in_channels (int): Number of in_channels in the input tensor.
         num_levels (int): Number of pyramid levels.
         filter_size (int): Size of the Gaussian blur filter (must be odd).
         sigma (float): Standard deviation for the Gaussian kernel.
-        channels (int): Number of channels in the input tensor.
     """
-    def __init__(self, num_levels, filter_size, sigma, channels):
+    def __init__(self, in_channels, num_levels, filter_size, sigma):
         super().__init__()
+        self.in_channels = in_channels
         self.num_levels = num_levels
         self.filter_size = filter_size
         self.sigma = sigma
-        self.channels = channels
-        self.register_buffer( name='filter', tensor=self._gaussian_filter(filter_size=filter_size, sigma=sigma, channels=channels))
+        self.register_buffer( name='filter', tensor=self._gaussian_filter(filter_size=filter_size, sigma=sigma, in_channels=in_channels))
 
-    def _gaussian_filter(self, filter_size, sigma, channels):
+    def _gaussian_filter(self, in_channels, filter_size, sigma):
         """
         Generate a multi-channel Gaussian blur filter.
 
         Args:
+            in_channels (int): Number of output in_channels for the filter.
             filter_size (int): Size of the Gaussian filter (must be odd).
             sigma (float): Standard deviation of the Gaussian distribution.
-            channels (int): Number of output channels for the filter.
 
         Returns:
-            torch.Tensor: A tensor of shape (channels, 1, filter_size, filter_size) containing
+            torch.Tensor: A tensor of shape (in_channels, 1, filter_size, filter_size) containing
                           the separable Gaussian kernels.
 
         Raises:
@@ -45,7 +45,7 @@ class LaplacianPyramid(nn.Module):
         filter = filter / torch.sum(input=filter)
 
         filter = filter.view(1, 1, filter_size, filter_size)
-        filter = filter.repeat(channels, 1, 1, 1)
+        filter = filter.repeat(in_channels, 1, 1, 1)
         return filter
 
     def forward(self, x):
@@ -65,7 +65,7 @@ class LaplacianPyramid(nn.Module):
 
         for i in range(self.num_levels):
             p = c
-            blurred = F.conv2d(input=c, weight=self.filter, padding=self.filter_size // 2, groups=self.channels)
+            blurred = F.conv2d(input=c, weight=self.filter, padding=self.filter_size // 2, groups=self.in_channels)
             down = F.avg_pool2d(input=blurred, kernel_size=2, stride=2)
             up = F.interpolate(input=down, size=c.shape[-2:], mode='bilinear', align_corners=False)
             l = c - up
@@ -81,42 +81,42 @@ class DirectionalFilterBank(nn.Module):
     using fan-shaped filters, shear transforms, and recursive binary filtering.
 
     Args:
+        in_channels (int): Number of input/output in_channels.
         num_levels (int): Number of decomposition levels (depth of binary filtering).
         filter_size (int): Size of the directional filter (must be odd).
         sigma (float): Standard deviation for Gaussian low-pass kernel.
         omega_x (float): Modulation frequency in the x-direction.
         omega_y (float): Modulation frequency in the y-direction.
-        channels (int): Number of input/output channels.
     """
-    def __init__(self, num_levels, filter_size, sigma, omega_x, omega_y, channels):
+    def __init__(self, in_channels, num_levels, filter_size, sigma, omega_x, omega_y):
         super().__init__()
+        self.in_channels = in_channels
         self.num_levels = num_levels
         self.filter_size = filter_size
         self.sigma = sigma
         self.omega_x = omega_x
         self.omega_y = omega_y
-        self.channels = channels
         self.register_buffer(
             name='filter',
             tensor=self._fan_filter(
                 filter_size=filter_size,
                 sigma=sigma, omega_x=omega_x,
                 omega_y=omega_y,
-                channels=channels
+                in_channels=in_channels
             )
         )
 
-    def _lowpass_filter(self, filter_size, sigma, channels):
+    def _lowpass_filter(self, filter_size, sigma, in_channels):
         """
         Generate multi-channel Gaussian low-pass filter.
 
         Args:
+            in_channels (int): Number of in_channels.
             filter_size (int): Filter size (must be odd).
             sigma (float): Gaussian standard deviation.
-            channels (int): Number of channels.
 
         Returns:
-            torch.Tensor: Low-pass filter tensor of shape (channels, 1, filter_size, filter_size).
+            torch.Tensor: Low-pass filter tensor of shape (in_channels, 1, filter_size, filter_size).
 
         Raises:
             AssertionError: If filter_size is not odd.
@@ -128,7 +128,7 @@ class DirectionalFilterBank(nn.Module):
         filter = filter / torch.sum(input=filter)
 
         filter = filter.view(1, 1, filter_size, filter_size)
-        filter = filter.repeat(channels, 1, 1, 1)
+        filter = filter.repeat(in_channels, 1, 1, 1)
         return filter
 
     def _highpass_filter(self, lp_filter):
@@ -147,7 +147,7 @@ class DirectionalFilterBank(nn.Module):
         hp_filter[0, 0, center_h, center_w] += 1.0
         return hp_filter
 
-    def _fan_filter(self, filter_size, sigma, omega_x, omega_y, channels):
+    def _fan_filter(self, filter_size, sigma, omega_x, omega_y, in_channels):
         """
         Create fan-shaped directional filter by modulating high-pass kernel.
 
@@ -156,12 +156,12 @@ class DirectionalFilterBank(nn.Module):
             sigma (float): Gaussian standard deviation.
             omega_x (float): X-direction frequency.
             omega_y (float): Y-direction frequency.
-            channels (int): Number of channels.
+            in_channels (int): Number of in_channels.
 
         Returns:
-            torch.Tensor: Fan filter tensor of shape (channels, 1, filter_size, filter_size).
+            torch.Tensor: Fan filter tensor of shape (in_channels, 1, filter_size, filter_size).
         """
-        lp_filter = self._lowpass_filter(filter_size=filter_size, sigma=sigma, channels=channels)
+        lp_filter = self._lowpass_filter(filter_size=filter_size, sigma=sigma, in_channels=in_channels)
         hp_filter = self._highpass_filter(lp_filter=lp_filter)
         H, W = hp_filter.shape[-2:]
         coords_y = torch.arange(end=H, dtype=torch.float32) - H // 2
@@ -207,8 +207,8 @@ class DirectionalFilterBank(nn.Module):
             Tuple[torch.Tensor, torch.Tensor]: Directional subband outputs.
         """
         sheared_pos, sheared_neg = self._apply_shear(x=x)
-        out1 = F.conv2d(input=sheared_pos, weight=self.filter, padding=self.filter_size // 2, groups=self.channels)
-        out2 = F.conv2d(input=sheared_neg, weight=self.filter, padding=self.filter_size // 2, groups=self.channels)
+        out1 = F.conv2d(input=sheared_pos, weight=self.filter, padding=self.filter_size // 2, groups=self.in_channels)
+        out2 = F.conv2d(input=sheared_neg, weight=self.filter, padding=self.filter_size // 2, groups=self.in_channels)
         return out1, out2
 
     def _binary_dfb(self, x, level):
@@ -246,23 +246,23 @@ class ContourletTransform(nn.Module):
     directional sub-band extraction on the resulting detail images.
 
     Args:
+        in_channels (int): Number of in_channels in the input tensor.
         num_levels (int): Number of scales in the Laplacian pyramid.
         filter_size (int): Size of the directional filters (must be odd).
         sigma (float): Standard deviation for Gaussian kernel.
         omega_x (float): Modulation frequency in the x-direction.
         omega_y (float): Modulation frequency in the y-direction.
-        channels (int): Number of channels in the input tensor.
     """
-    def __init__(self, num_levels, filter_size, sigma, omega_x, omega_y, channels):
+    def __init__(self, in_channels, num_levels, filter_size, sigma, omega_x, omega_y):
         super().__init__()
+        self.in_channels = in_channels
         self.num_levels = num_levels
         self.filter_size = filter_size
         self.sigma = sigma
         self.omega_x = omega_x
         self.omega_y = omega_y
-        self.channels = channels
 
-        self.lp = LaplacianPyramid(num_levels=num_levels, filter_size=filter_size, sigma=sigma, channels=channels)
+        self.lp = LaplacianPyramid(num_levels=num_levels, filter_size=filter_size, sigma=sigma, in_channels=in_channels)
         self.dfb = nn.ModuleDict()
 
         for level in range(1, num_levels + 1):
@@ -272,7 +272,7 @@ class ContourletTransform(nn.Module):
                 sigma=sigma,
                 omega_x=omega_x,
                 omega_y=omega_y,
-                channels=channels
+                in_channels=in_channels
             )
 
     def forward(self, x):
