@@ -1,6 +1,5 @@
 import torch.nn as nn
 
-from diffusion import ContourletDiffusion
 
 class SWISH(nn.Sigmoid):
     def __init__(self, *args, **kwargs):
@@ -22,4 +21,3 @@ class SWISH(nn.Sigmoid):
             torch.Tensor: Output tensor after applying SWISH activation.
         """
         return input * super().forward(input=input)
-
