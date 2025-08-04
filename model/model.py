@@ -2,33 +2,45 @@ import torch
 import torch.nn as nn
 import lightning as L
 
-from torch.optim import SGD, Adam, AdamW, RMSprop, Adagrad, Adadelta, Rprop, LBFGS, ASGD, Adamax
+from torch.optim.sgd import SGD
+from torch.optim.asgd import ASGD
+from torch.optim.rmsprop import RMSprop
+from torch.optim.rprop import Rprop
+from torch.optim.adam import Adam
+from torch.optim.adamw import AdamW
+from torch.optim.adamax import Adamax
+from torch.optim.adagrad import Adagrad
+from torch.optim.adadelta import Adadelta
+from torch.optim.lbfgs import LBFGS
 
-from model.losses import *
-from model.block import *
+from model.loss import *
+from model.blocks import Net
 from utils.metrics import *
-from utils.hook import register_full_nan_inf_hooks
-from utils.utils import weights_init
 
 
-class HomomorphicUnet(nn.Module):
-    def __init__(self, image_size, offset, cutoff):
+class ContourletDiffusion(nn.Module):
+    def __init__(
+        self,
+        in_channels=3,
+        out_channels=3,
+        hidden_channels=64,
+        num_levels=3,
+        temb_dim=64,
+        dropout=0.1,
+        filter_size=5,
+        sigma=1.0,
+        omega_x=0.25,
+        omega_y=0.25,
+        squeeze_ratio=0.3,
+        shortcut=True,
+        trainable=False
+    ):
         super().__init__()
 
-        self.rgb2ycrcb = RGB2YCrCb(
-            offset=offset
-        )
-        self.homo_separate = HomomorphicSeparation(
-            size=image_size,
-            cutoff=cutoff,
-            trainable=False
-        )
-        self.unet = UNet(
-        )
-        self.refine = IterableRefine(
-        )
-        self.ycrcb2rgb = YCrCb2RGB(
-            offset=offset
+        self.net = Net(
+            in_channels=in_channels, out_channels=out_channels, hidden_channels=hidden_channels, num_levels=num_levels,
+            temb_dim=temb_dim, dropout=dropout, filter_size=filter_size, sigma=sigma, omega_x=omega_x, omega_y=omega_y,
+            squeeze_ratio=squeeze_ratio, shortcut=shortcut, trainable=trainable
         )
 
     def forward(self, x):
@@ -41,17 +53,26 @@ class HomomorphicUnet(nn.Module):
         return self.Y, self.Cr, self.Cb, self.x_i, self.x_d, self.o_i, self.n_i, self.n_Y, self.enh_img
 
 
-class HomomorphicUnetLightning(L.LightningModule):
+class ContourletDiffusionLightning(L.LightningModule):
     def __init__(self, hparams):
         super().__init__()
         self.save_hyperparameters(hparams)
 
-        self.model = HomomorphicUnet(
-            image_size=hparams['image_size'],
-            offset=hparams['offset'],
-            cutoff=hparams["cutoff"],
+        self.model = ContourletDiffusion(
+            in_channels=hparams['in_channels'],
+            out_channels=hparams['out_channels'],
+            hidden_channels=hparams['hidden_channels'],
+            num_levels=hparams['num_levels'],
+            temb_dim=hparams['temb_dim'],
+            dropout=hparams['dropout'],
+            filter_size=hparams['filter_size'],
+            sigma=hparams['sigma'],
+            omega_x=hparams['omega_x'],
+            omega_y=hparams['omega_y'],
+            squeeze_ratio=hparams['squeeze_ratio'],
+            shortcut=hparams['shortcut'],
+            trainable=hparams['trainable']
         )
-        self.model.apply(fn=weights_init)
 
         self.spa_loss = L_spa().eval()
         self.col_loss = L_col().eval()
@@ -64,13 +85,9 @@ class HomomorphicUnetLightning(L.LightningModule):
         self.lambda_tva = hparams["lambda_tva"]
 
         self.metric = ImageQualityMetrics(device="cuda")
-        self.metric.eval()
 
     def forward(self, x):
         return self.model(x)
-
-    def on_fit_start(self):
-        register_full_nan_inf_hooks(model=self.model)
 
     def training_step(self, batch, batch_idx):
         x = batch.to(self.device)
@@ -102,71 +119,7 @@ class HomomorphicUnetLightning(L.LightningModule):
             "train/3_exp": loss_exp,
             "train/4_tva": loss_tva,
             "train/5_tot": loss_tot,
-            # "train/4_tot": loss_tot,
         }, prog_bar=True)
-
-        if torch.isnan(input=loss_spa):
-            print("LOSS SPA IS NAN!")
-        if torch.isnan(input=loss_col):
-            print("LOSS COL IS NAN!")
-        if torch.isnan(input=loss_exp):
-            print("LOSS EXP IS NAN!")
-        if torch.isnan(input=loss_tva):
-            print("LOSS TVA IS NAN!")
-        if torch.isnan(input=loss_tot):
-            print("LOSS TOT IS NAN!")
-
-        if batch_idx % 250 == 0:
-            self.logger.experiment.add_images(
-                "train/1_input",
-                x,
-                self.global_step
-            )
-            self.logger.experiment.add_images(
-                "train/2_Y",
-                Y,
-                self.global_step
-            )
-            self.logger.experiment.add_images(
-                "train/3_Cr",
-                Cr,
-                self.global_step
-            )
-            self.logger.experiment.add_images(
-                "train/4_Cb",
-                Cb,
-                self.global_step
-            )
-            self.logger.experiment.add_images(
-                "train/5_x_i",
-                x_i,
-                self.global_step
-            )
-            self.logger.experiment.add_images(
-                "train/6_x_d",
-                x_d,
-                self.global_step
-            )
-            self.logger.experiment.add_images(
-                "train/7_o_i",
-                o_i,
-                self.global_step
-            )
-            self.logger.experiment.add_images(
-                "train/8_n_i",
-                n_i,
-                self.global_step
-            )
-            self.logger.experiment.add_images(
-                "train/9_n_Y",
-                n_Y,
-                self.global_step
-            )
-            self.logger.experiment.add_images(
-                "train/0_enh_img",
-                enh_img,
-                self.global_step
-            )
         return loss_tot
 
     def validation_step(self, batch, batch_idx):
@@ -200,6 +153,58 @@ class HomomorphicUnetLightning(L.LightningModule):
             "valid/4_tva": loss_tva,
             "valid/5_tot": loss_tot,
         }, prog_bar=True)
+
+        if batch_idx % 250 == 0:
+            self.logger.experiment.add_image(
+                "train/1_input",
+                x,
+                self.global_step
+            )
+            self.logger.experiment.add_image(
+                "train/2_Y",
+                Y,
+                self.global_step
+            )
+            self.logger.experiment.add_image(
+                "train/3_Cr",
+                Cr,
+                self.global_step
+            )
+            self.logger.experiment.add_image(
+                "train/4_Cb",
+                Cb,
+                self.global_step
+            )
+            self.logger.experiment.add_image(
+                "train/5_x_i",
+                x_i,
+                self.global_step
+            )
+            self.logger.experiment.add_image(
+                "train/6_x_d",
+                x_d,
+                self.global_step
+            )
+            self.logger.experiment.add_image(
+                "train/7_o_i",
+                o_i,
+                self.global_step
+            )
+            self.logger.experiment.add_image(
+                "train/8_n_i",
+                n_i,
+                self.global_step
+            )
+            self.logger.experiment.add_image(
+                "train/9_n_Y",
+                n_Y,
+                self.global_step
+            )
+            self.logger.experiment.add_image(
+                "train/0_enh_img",
+                enh_img,
+                self.global_step
+            )
         return loss_tot
 
     def test_step(self, batch, batch_idx, dataloader_idx=0):
@@ -235,6 +240,31 @@ class HomomorphicUnetLightning(L.LightningModule):
                 momentum=self.hparams.get('momentum', 0.9),
                 weight_decay=weight_decay
             )
+        elif optim_name == "asgd":
+            return ASGD(
+                params=self.parameters(),
+                lr=lr,
+                lambd=self.hparams.get('lambd', 1e-8),
+                alpha=self.hparams.get('alpha', 0.75),
+                t0=self.hparams.get('t0', 1e6),
+                weight_decay=weight_decay
+            )
+        elif optim_name == "rmsprop":
+            return RMSprop(
+                params=self.parameters(),
+                lr=lr,
+                alpha=self.hparams.get('alpha', 0.99),
+                eps=eps,
+                momentum=self.hparams.get('momentum', 0.9),
+                weight_decay=weight_decay
+            )
+        elif optim_name == "rprop":
+            return Rprop(
+                params=self.parameters(),
+                lr=lr,
+                etas=self.hparams.get('etas', (0.5, 1.2)),
+                step_sizes=self.hparams.get('step_sizes', (1e-9, 50))
+            )
         elif optim_name == "adam":
             return Adam(
                 params=self.parameters(),
@@ -251,13 +281,12 @@ class HomomorphicUnetLightning(L.LightningModule):
                 eps=eps,
                 weight_decay=weight_decay
             )
-        elif optim_name == "rmsprop":
-            return RMSprop(
+        elif optim_name == "adamax":
+            return Adamax(
                 params=self.parameters(),
                 lr=lr,
-                alpha=self.hparams.get('alpha', 0.99),
+                betas=self.hparams.get('betas', (0.9, 0.999)),
                 eps=eps,
-                momentum=self.hparams.get('momentum', 0.9),
                 weight_decay=weight_decay
             )
         elif optim_name == "adagrad":
@@ -276,13 +305,6 @@ class HomomorphicUnetLightning(L.LightningModule):
                 eps=eps,
                 weight_decay=weight_decay
             )
-        elif optim_name == "rprop":
-            return Rprop(
-                params=self.parameters(),
-                lr=lr,
-                etas=self.hparams.get('etas', (0.5, 1.2)),
-                step_sizes=self.hparams.get('step_sizes', (1e-9, 50))
-            )
         elif optim_name == "lbfgs":
             return LBFGS(
                 params=self.parameters(),
@@ -293,23 +315,6 @@ class HomomorphicUnetLightning(L.LightningModule):
                 tolerance_change=self.hparams.get('tolerance_change', 1e-9),
                 history_size=self.hparams.get('history_size', 100),
                 line_search_fn=self.hparams.get('line_search_fn', None)
-            )
-        elif optim_name == "asgd":
-            return ASGD(
-                params=self.parameters(),
-                lr=lr,
-                lambd=self.hparams.get('lambd', 1e-8),
-                alpha=self.hparams.get('alpha', 0.75),
-                t0=self.hparams.get('t0', 1e6),
-                weight_decay=weight_decay
-            )
-        elif optim_name == "adamax":
-            return Adamax(
-                params=self.parameters(),
-                lr=lr,
-                betas=self.hparams.get('betas', (0.9, 0.999)),
-                eps=eps,
-                weight_decay=weight_decay
             )
         else:
             raise ValueError(f"Unsupported optimizer: {optim_name}")
