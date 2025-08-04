@@ -5,7 +5,7 @@ from model.blocks.contourlet import ContourletTransform
 from model.blocks.directionalfusion import DirectionalFusion
 from model.blocks.unet import UNet
 
-class Net(nn.Module):
+class ContourletDiffusion(nn.Module):
     def __init__(
         self,
         in_channels=3,
@@ -68,4 +68,4 @@ class Net(nn.Module):
         pyramid, subbands = self.contourlet(x)
         fusion = self.directioanlfusion(subbands)
         out = self.unet(x, t, pyramid, fusion)
-        return out
+        return pyramid, subbands, fusion, out
