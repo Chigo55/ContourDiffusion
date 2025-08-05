@@ -35,13 +35,9 @@ class TotalVariance(nn.Module):
     """
     TotalVariance computes the total variation loss, which is a measure of the
     noise in an image. It encourages spatial smoothness in the generated image.
-
-    Args:
-        weight (float): A weight to scale the loss. Defaults to 1.
     """
-    def __init__(self, weight: float = 1.0):
+    def __init__(self):
         super().__init__()
-        self.weight = weight
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -66,7 +62,42 @@ class TotalVariance(nn.Module):
             input=(x[:, :, :, 1:] - x[:, :, :, :W - 1]),
             exponent=2
         ).sum()
-        return self.weight * 2 * (tv_H / count_H + tv_W / count_W) / B
+        return 2 * (tv_H / count_H + tv_W / count_W) / B
+
+
+class NoiseLoss(nn.Module):
+    """
+    NoiseLoss combines L1 loss and Total Variance loss. This is often used
+    in image denoising tasks to penalize pixel-wise differences and noise.
+
+    Args:
+        l1_weight (float): The weight for the L1 loss component. Defaults to 1.0.
+        tv_weight (float): The weight for the Total Variance loss component. Defaults to 0.1.
+    """
+    def __init__(self, l1_weight: float = 0.8, tv_weight: float = 0.2):
+        super().__init__()
+        self.l1_weight = l1_weight
+        self.tv_weight = tv_weight
+        self.l1_loss = MeanAbsoluteError()
+        self.tv_loss = TotalVariance()
+
+    def forward(self, preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        Calculates the combined noise loss.
+
+        The loss is a weighted sum of the L1 loss between predictions and targets,
+        and the Total Variance loss of the predictions.
+
+        Args:
+            preds (torch.Tensor): The predicted images tensor of shape (B, C, H, W).
+            targets (torch.Tensor): The ground truth images tensor of shape (B, C, H, W).
+
+        Returns:
+            torch.Tensor: The scalar combined noise loss.
+        """
+        l1_loss_val = self.l1_loss(input=preds, target=targets)
+        tv_loss_val = self.tv_loss(preds)
+        return self.l1_weight * l1_loss_val + self.tv_weight * tv_loss_val
 
 
 class MeanSquaredError(nn.MSELoss):
@@ -121,6 +152,41 @@ class PhaseSpectrum(nn.Module):
         targets_phase = torch.angle(input=targets_fft)
 
         return F.l1_loss(input=preds_phase, target=targets_phase)
+
+
+class FrequencyLoss(nn.Module):
+    """
+    FrequencyLoss combines a magnitude-based loss (L2) and a phase-based loss (L1)
+    in the frequency domain.
+
+    Args:
+        mag_weight (float): The weight for the magnitude loss component. Defaults to 1.0.
+        phase_weight (float): The weight for the phase loss component. Defaults to 1.0.
+    """
+    def __init__(self, mag_weight: float = 0.8, phase_weight: float = 1.0):
+        super().__init__()
+        self.mag_weight = mag_weight
+        self.phase_weight = phase_weight
+        self.l2_loss = MeanSquaredError()
+
+    def forward(self, preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        Calculates the combined frequency domain loss.
+
+        Args:
+            preds (torch.Tensor): The predicted images tensor of shape (B, C, H, W).
+            targets (torch.Tensor): The ground truth images tensor of shape (B, C, H, W).
+
+        Returns:
+            torch.Tensor: The scalar combined frequency loss.
+        """
+        preds_fft = torch.fft.fft2(preds, dim=(-2, -1))
+        targets_fft = torch.fft.fft2(targets, dim=(-2, -1))
+
+        mag_loss = self.l2_loss(torch.abs(input=preds_fft), torch.abs(input=targets_fft))
+        phase_loss = F.l1_loss(input=torch.angle(input=preds_fft), target=torch.angle(input=targets_fft))
+
+        return self.mag_weight * mag_loss + self.phase_weight * phase_loss
 
 
 class StructuralSimilarity(nn.Module):
@@ -181,72 +247,7 @@ class PerceptualSimilarity(nn.Module):
         """
         return self.lpips(preds, targets)
 
-class NoiseLoss(nn.Module):
-    """
-    NoiseLoss combines L1 loss and Total Variance loss. This is often used
-    in image denoising tasks to penalize pixel-wise differences and noise.
 
-    Args:
-        l1_weight (float): The weight for the L1 loss component. Defaults to 1.0.
-        tv_weight (float): The weight for the Total Variance loss component. Defaults to 0.1.
-    """
-    def __init__(self, l1_weight: float = 1.0, tv_weight: float = 0.1):
-        super().__init__()
-        self.l1_weight = l1_weight
-        self.l1_loss = nn.L1Loss()
-        self.tv_loss = TotalVariance(weight=tv_weight)
-
-    def forward(self, preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        """
-        Calculates the combined noise loss.
-
-        The loss is a weighted sum of the L1 loss between predictions and targets,
-        and the Total Variance loss of the predictions.
-
-        Args:
-            preds (torch.Tensor): The predicted images tensor of shape (B, C, H, W).
-            targets (torch.Tensor): The ground truth images tensor of shape (B, C, H, W).
-
-        Returns:
-            torch.Tensor: The scalar combined noise loss.
-        """
-        l1_loss_val = self.l1_loss(input=preds, target=targets)
-        tv_loss_val = self.tv_loss(preds)
-        return self.l1_weight * l1_loss_val + tv_loss_val
-
-class FrequencyLoss(nn.Module):
-    """
-    FrequencyLoss combines a magnitude-based loss (L2) and a phase-based loss (L1)
-    in the frequency domain.
-
-    Args:
-        mag_weight (float): The weight for the magnitude loss component. Defaults to 1.0.
-        phase_weight (float): The weight for the phase loss component. Defaults to 1.0.
-    """
-    def __init__(self, mag_weight: float = 1.0, phase_weight: float = 1.0):
-        super().__init__()
-        self.mag_weight = mag_weight
-        self.phase_weight = phase_weight
-        self.l2_loss = nn.MSELoss()
-
-    def forward(self, preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        """
-        Calculates the combined frequency domain loss.
-
-        Args:
-            preds (torch.Tensor): The predicted images tensor of shape (B, C, H, W).
-            targets (torch.Tensor): The ground truth images tensor of shape (B, C, H, W).
-
-        Returns:
-            torch.Tensor: The scalar combined frequency loss.
-        """
-        preds_fft = torch.fft.fft2(preds, dim=(-2, -1))
-        targets_fft = torch.fft.fft2(targets, dim=(-2, -1))
-
-        mag_loss = self.l2_loss(torch.abs(input=preds_fft), torch.abs(input=targets_fft))
-        phase_loss = F.l1_loss(input=torch.angle(input=preds_fft), target=torch.angle(input=targets_fft))
-
-        return self.mag_weight * mag_loss + self.phase_weight * phase_loss
 class StructuralLoss(nn.Module):
     """
     StructuralLoss computes a weighted combination of Structural Similarity (SSIM)
