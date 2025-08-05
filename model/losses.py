@@ -149,7 +149,7 @@ class StructuralSimilarity(nn.Module):
         Returns:
             torch.Tensor: The scalar SSIM loss.
         """
-        return self.ssim(preds, targets)
+        return 1 - self.ssim(preds, targets)
 
 
 class PerceptualSimilarity(nn.Module):
@@ -243,8 +243,8 @@ class FrequencyLoss(nn.Module):
         preds_fft = torch.fft.fft2(preds, dim=(-2, -1))
         targets_fft = torch.fft.fft2(targets, dim=(-2, -1))
 
-        mag_loss = self.l2_loss(torch.abs(preds_fft), torch.abs(targets_fft))
-        phase_loss = F.l1_loss(input=torch.angle(preds_fft), target=torch.angle(targets_fft))
+        mag_loss = self.l2_loss(torch.abs(input=preds_fft), torch.abs(input=targets_fft))
+        phase_loss = F.l1_loss(input=torch.angle(input=preds_fft), target=torch.angle(input=targets_fft))
 
         return self.mag_weight * mag_loss + self.phase_weight * phase_loss
 class StructuralLoss(nn.Module):
