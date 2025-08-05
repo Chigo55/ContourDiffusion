@@ -67,5 +67,5 @@ class ContourletDiffusion(nn.Module):
     def forward(self, x, t):
         pyramid, subbands = self.contourlet(x)
         fusion = self.directioanlfusion(subbands)
-        out = self.unet(x, t, pyramid, fusion)
-        return pyramid, subbands, fusion, out
+        pred = self.unet(x, t, pyramid, fusion)
+        return pyramid, subbands, fusion, pred
