@@ -1,8 +1,6 @@
 import torch
 import torch.nn as nn
 
-from model.blocks import SWISH
-
 
 class DepthwiseSeparableConv(nn.Module):
     """
@@ -49,7 +47,7 @@ class DepthwiseSeparableConv(nn.Module):
             nn.BatchNorm2d(
                 num_features=out_channels
             ),
-            SWISH()
+            nn.SiLU()
         )
 
     def forward(self, x):

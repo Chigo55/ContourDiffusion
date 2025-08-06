@@ -3,8 +3,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from model.blocks import SWISH
-
 
 class TimeEmbeddingBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -21,7 +19,7 @@ class TimeEmbeddingBlock(nn.Module):
 
         self.linear1 = nn.Linear(in_features=in_channels, out_features=out_channels)
         self.linear2 = nn.Linear(in_features=out_channels, out_features=out_channels)
-        self.act = SWISH()
+        self.act = nn.SiLU()
 
     def get_timestep_embedding(self, t, embed_dim):
         """
@@ -79,12 +77,12 @@ class ResnetBlock(nn.Module):
 
         self.gn1 = nn.GroupNorm(num_groups=32, num_channels=in_channels, eps=1e-6, affine=True)
         self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=3, stride=1, padding=1)
-        self.act1 = SWISH()
+        self.act1 = nn.SiLU()
 
         self.temb_proj = TimeEmbeddingBlock(in_channels=temb_dim, out_channels=out_channels)
 
         self.gn2 = nn.GroupNorm(num_groups=32, num_channels=out_channels, eps=1e-6, affine=True)
-        self.act2 = SWISH()
+        self.act2 = nn.SiLU()
         self.dropout = nn.Dropout(p=dropout)
         self.conv2 = nn.Conv2d(in_channels=out_channels, out_channels=out_channels, kernel_size=3, stride=1, padding=1)
 
