@@ -1,8 +1,23 @@
+import matplotlib.pyplot as plt
 import torch.nn as nn
 
 from pathlib import Path
 from torchvision.utils import save_image
+import torchvision.transforms.functional as F
 from torchinfo import summary
+
+
+def show_batch(images, ncols=8):
+    nimgs = images.shape[0]
+    nrows = (nimgs + ncols - 1) // ncols
+    plt.figure(figsize=(ncols * 3, nrows * 3))
+    for i in range(nimgs):
+        plt.subplot(nrows, ncols, i + 1)
+        plt.imshow(X=F.to_pil_image(pic=images[i]))
+        plt.axis('off')
+        plt.title(label=f"Image {i}")
+    plt.tight_layout()
+    plt.show()
 
 
 def make_dirs(path: str | Path):
