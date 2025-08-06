@@ -2,43 +2,21 @@ import torch
 import torch.nn as nn
 import lightning as L
 
-from torch.optim import SGD, Adam, AdamW, RMSprop, Adagrad, Adadelta, Rprop, LBFGS, ASGD, Adamax
+from torch.optim.sgd import SGD
+from torch.optim.asgd import ASGD
+from torch.optim.rmsprop import RMSprop
+from torch.optim.rprop import Rprop
+from torch.optim.adam import Adam
+from torch.optim.adamw import AdamW
+from torch.optim.adamax import Adamax
+from torch.optim.adagrad import Adagrad
+from torch.optim.adadelta import Adadelta
+from torch.optim.lbfgs import LBFGS
 
-from model.losses import *
-from model.block import *
-from utils.metrics import *
-from utils.hook import register_full_nan_inf_hooks
-from utils.utils import weights_init
+from model.loss import NoiseLoss, FrequencyLoss, StructuralLoss
+from model.blocks import ContourletDiffusion
+from utils.metrics import ImageQualityMetrics
 
-
-class HomomorphicUnet(nn.Module):
-    def __init__(self, image_size, offset, cutoff):
-        super().__init__()
-
-        self.rgb2ycrcb = RGB2YCrCb(
-            offset=offset
-        )
-        self.homo_separate = HomomorphicSeparation(
-            size=image_size,
-            cutoff=cutoff,
-            trainable=False
-        )
-        self.unet = UNet(
-        )
-        self.refine = IterableRefine(
-        )
-        self.ycrcb2rgb = YCrCb2RGB(
-            offset=offset
-        )
-
-    def forward(self, x):
-        self.Y, self.Cr, self.Cb = self.rgb2ycrcb(x)
-        self.x_i, self.x_d = self.homo_separate(self.Y)
-        self.o_i = self.unet(self.x_i)
-        self.n_i = self.refine(self.x_i, self.o_i)
-        self.n_Y = self.n_i * self.x_d
-        self.enh_img = self.ycrcb2rgb(self.n_Y, self.Cr, self.Cb)
-        return self.Y, self.Cr, self.Cb, self.x_i, self.x_d, self.o_i, self.n_i, self.n_Y, self.enh_img
 
 
 class HomomorphicUnetLightning(L.LightningModule):
@@ -46,25 +24,27 @@ class HomomorphicUnetLightning(L.LightningModule):
         super().__init__()
         self.save_hyperparameters(hparams)
 
-        self.model = HomomorphicUnet(
-            image_size=hparams['image_size'],
-            offset=hparams['offset'],
-            cutoff=hparams["cutoff"],
+        self.model = ContourletDiffusion(
+            in_channels=hparams['in_channels'],
+            out_channels=hparams['out_channels'],
+            hidden_channels=hparams['hidden_channels'],
+            num_levels=hparams['num_levels'],
+            temb_dim=hparams['temb_dim'],
+            dropout=hparams['dropout'],
+            filter_size=hparams['filter_size'],
+            sigma=hparams['sigma'],
+            omega_x=hparams['omega_x'],
+            omega_y=hparams['omega_y'],
+            squeeze_ratio=hparams['squeeze_ratio'],
+            shortcut=hparams['shortcut'],
+            trainable=hparams['trainable']
         )
-        self.model.apply(fn=weights_init)
 
-        self.spa_loss = L_spa().eval()
-        self.col_loss = L_col().eval()
-        self.exp_loss = L_exp().eval()
-        self.tva_loss = L_tva().eval()
+        self.noise_loss = NoiseLoss()
+        self.freq_loss = FrequencyLoss()
+        self.struc_loss = StructuralLoss()
 
-        self.lambda_spa = hparams["lambda_spa"]
-        self.lambda_col = hparams["lambda_col"]
-        self.lambda_exp = hparams["lambda_exp"]
-        self.lambda_tva = hparams["lambda_tva"]
-
-        self.metric = ImageQualityMetrics(device="cuda")
-        self.metric.eval()
+        self.metric = ImageQualityMetrics(device=hparams['device'])
 
     def forward(self, x):
         return self.model(x)
@@ -74,35 +54,23 @@ class HomomorphicUnetLightning(L.LightningModule):
 
     def training_step(self, batch, batch_idx):
         x = batch.to(self.device)
-        Y, Cr, Cb, x_i, x_d, o_i, n_i, n_Y, enh_img = self(x)
+        pyramid, subbands, fusion, pred = self(x)
 
-        loss_spa = self.lambda_spa * torch.mean(
-            input=self.spa_loss(enh_img, x)
-        )
-        loss_col = self.lambda_col * torch.mean(
-            input=self.col_loss(enh_img)
-        )
-        loss_exp = self.lambda_exp * torch.mean(
-            input=self.exp_loss(enh_img)
-        )
-        loss_tva = self.lambda_tva * torch.mean(
-            input=self.tva_loss(o_i)
-        )
+        loss_noise = self.noise_loss(pred, x)
+        loss_freq = self.freq_loss(pred)
+        loss_struc = self.struc_loss(pred)
 
         loss_tot = (
-            loss_spa +
-            loss_col +
-            loss_exp +
-            loss_tva
+            loss_noise +
+            loss_freq +
+            loss_struc
         )
 
         self.log_dict(dictionary={
-            "train/1_spa": loss_spa,
-            "train/2_col": loss_col,
-            "train/3_exp": loss_exp,
-            "train/4_tva": loss_tva,
-            "train/5_tot": loss_tot,
-            # "train/4_tot": loss_tot,
+            "train/1_spa": loss_noise,
+            "train/2_col": loss_freq,
+            "train/3_exp": loss_struc,
+            "train/4_tot": loss_tot,
         }, prog_bar=True)
 
         if torch.isnan(input=loss_spa):
@@ -171,35 +139,51 @@ class HomomorphicUnetLightning(L.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         x = batch.to(self.device)
-        Y, Cr, Cb, x_i, x_d, o_i, n_i, n_Y, enh_img = self(x)
+        pyramid, subbands, fusion, pred = self(x)
 
-        loss_spa = self.lambda_spa * torch.mean(
-            input=self.spa_loss(enh_img, x)
-        )
-        loss_col = self.lambda_col * torch.mean(
-            input=self.col_loss(enh_img)
-        )
-        loss_exp = self.lambda_exp * torch.mean(
-            input=self.exp_loss(enh_img)
-        )
-        loss_tva = self.lambda_tva * torch.mean(
-            input=self.tva_loss(o_i)
-        )
+        loss_noise = self.noise_loss(pred, x)
+        loss_freq = self.freq_loss(pred)
+        loss_struc = self.struc_loss(pred)
 
         loss_tot = (
-            loss_exp +
-            loss_spa +
-            loss_col +
-            loss_tva
+            loss_noise +
+            loss_freq +
+            loss_struc
         )
 
         self.log_dict(dictionary={
-            "valid/1_spa": loss_spa,
-            "valid/2_col": loss_col,
-            "valid/3_exp": loss_exp,
-            "valid/4_tva": loss_tva,
-            "valid/5_tot": loss_tot,
+            "valid/1_spa": loss_noise,
+            "valid/2_col": loss_freq,
+            "valid/3_exp": loss_struc,
+            "valid/4_tot": loss_tot,
         }, prog_bar=True)
+
+        if batch_idx % 250 == 0:
+            self.logger.experiment.add_image(
+                "valid/1_target",
+                x,
+                self.global_step
+            )
+            self.logger.experiment.add_image(
+                "valid/2_pred",
+                pred,
+                self.global_step
+            )
+            # self.logger.experiment.add_image(
+            #     "valid/3_pyramid",
+            #     pyramid,
+            #     self.global_step
+            # )
+            # self.logger.experiment.add_image(
+            #     "valid/4_subbands",
+            #     subbands,
+            #     self.global_step
+            # )
+            # self.logger.experiment.add_image(
+            #     "valid/5_fusion",
+            #     fusion,
+            #     self.global_step
+            # )
         return loss_tot
 
     def test_step(self, batch, batch_idx, dataloader_idx=0):

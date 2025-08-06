@@ -1,9 +1,42 @@
 import pyiqa
+import pyiqa
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 
+class MeanAbsoluteError(nn.L1Loss):
+    """
+    MeanAbsoluteError is a wrapper around the torch.nn.L1Loss module.
+    It computes the mean absolute error (L1 loss) between each element in
+    the input and target.
+
+    Args:
+        *args: Variable length argument list for nn.L1Loss.
+        **kwargs: Arbitrary keyword arguments for nn.L1Loss.
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """
+        Calculates the L1 loss.
+
+        Args:
+            input (torch.Tensor): The predicted tensor.
+            target (torch.Tensor): The ground truth tensor.
+
+        Returns:
+            torch.Tensor: The scalar L1 loss value.
+        """
+        return super().forward(input=input, target=target)
+
+
+class TotalVariance(nn.Module):
+    """
+    TotalVariance computes the total variation loss, which is a measure of the
+    noise in an image. It encourages spatial smoothness in the generated image.
+    """
 class MeanAbsoluteError(nn.L1Loss):
     """
     MeanAbsoluteError is a wrapper around the torch.nn.L1Loss module.
@@ -197,6 +230,34 @@ class StructuralSimilarity(nn.Module):
         device (str): The device to run the metric on, e.g., "cuda" or "cpu".
     """
     def __init__(self, device: str = "cuda"):
+    def forward(self, preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        Calculates the combined frequency domain loss.
+
+        Args:
+            preds (torch.Tensor): The predicted images tensor of shape (B, C, H, W).
+            targets (torch.Tensor): The ground truth images tensor of shape (B, C, H, W).
+
+        Returns:
+            torch.Tensor: The scalar combined frequency loss.
+        """
+        preds_fft = torch.fft.fft2(preds, dim=(-2, -1))
+        targets_fft = torch.fft.fft2(targets, dim=(-2, -1))
+
+        mag_loss = self.l2_loss(torch.abs(input=preds_fft), torch.abs(input=targets_fft))
+        phase_loss = F.l1_loss(input=torch.angle(input=preds_fft), target=torch.angle(input=targets_fft))
+
+        return self.mag_weight * mag_loss + self.phase_weight * phase_loss
+
+
+class StructuralSimilarity(nn.Module):
+    """
+    StructuralSimilarity computes the Structural Similarity (SSIM) loss between two images.
+
+    Args:
+        device (str): The device to run the metric on, e.g., "cuda" or "cpu".
+    """
+    def __init__(self, device: str = "cuda"):
         super().__init__()
         self.ssim = pyiqa.create_metric(
             metric_name='ssim',
@@ -259,7 +320,87 @@ class StructuralLoss(nn.Module):
         device (str): The device to run the metrics on, e.g., "cuda" or "cpu".
     """
     def __init__(self, ssim_weight: float = 0.8, lpips_weight: float = 0.2, device: str = "cuda"):
+        self.ssim = pyiqa.create_metric(
+            metric_name='ssim',
+            device=device,
+            as_loss=True
+        )
+
+    def forward(self, preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        Calculates the SSIM loss.
+
+        Args:
+            preds (torch.Tensor): The predicted images tensor of shape (B, C, H, W).
+            targets (torch.Tensor): The ground truth images tensor of shape (B, C, H, W).
+
+        Returns:
+            torch.Tensor: The scalar SSIM loss.
+        """
+        return 1 - self.ssim(preds, targets)
+
+
+class PerceptualSimilarity(nn.Module):
+    """
+    PerceptualSimilarity computes the Learned Perceptual Image Patch Similarity (LPIPS)
+    loss between two images using a pre-trained VGG network.
+
+    Args:
+        device (str): The device to run the metric on, e.g., "cuda" or "cpu".
+    """
+    def __init__(self, device: str = "cuda"):
         super().__init__()
+        self.lpips = pyiqa.create_metric(
+            metric_name='lpips-vgg',
+            device=device,
+            as_loss=True
+        )
+
+    def forward(self, preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        Calculates the LPIPS loss.
+
+        Args:
+            preds (torch.Tensor): The predicted images tensor of shape (B, C, H, W).
+            targets (torch.Tensor): The ground truth images tensor of shape (B, C, H, W).
+
+        Returns:
+            torch.Tensor: The scalar LPIPS loss.
+        """
+        return self.lpips(preds, targets)
+
+
+class StructuralLoss(nn.Module):
+    """
+    StructuralLoss computes a weighted combination of Structural Similarity (SSIM)
+    and Perceptual Similarity (LPIPS) losses.
+
+    Args:
+        ssim_weight (float): The weight for the SSIM loss component.
+        lpips_weight (float): The weight for the LPIPS loss component.
+        device (str): The device to run the metrics on, e.g., "cuda" or "cpu".
+    """
+    def __init__(self, ssim_weight: float = 0.8, lpips_weight: float = 0.2, device: str = "cuda"):
+        super().__init__()
+        self.ssim_weight = ssim_weight
+        self.lpips_weight = lpips_weight
+        self.ss_loss = StructuralSimilarity(device=device)
+        self.ps_loss = PerceptualSimilarity(device=device)
+
+    def forward(self, preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        Calculates the combined structural loss.
+
+        Args:
+            preds (torch.Tensor): The predicted images tensor of shape (B, C, H, W).
+            targets (torch.Tensor): The ground truth images tensor of shape (B, C, H, W).
+
+        Returns:
+            torch.Tensor: The scalar combined structural loss.
+        """
+        ssim_loss = self.ss_loss(preds, targets)
+        lpips_loss = self.ps_loss(preds, targets)
+        return self.ssim_weight * ssim_loss + self.lpips_weight * lpips_loss
         self.ssim_weight = ssim_weight
         self.lpips_weight = lpips_weight
         self.ss_loss = StructuralSimilarity(device=device)
