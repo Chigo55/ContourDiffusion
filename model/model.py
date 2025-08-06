@@ -13,44 +13,10 @@ from torch.optim.adagrad import Adagrad
 from torch.optim.adadelta import Adadelta
 from torch.optim.lbfgs import LBFGS
 
-from model.loss import *
-from model.blocks import Net
-from utils.metrics import *
+from model.loss import NoiseLoss, FrequencyLoss, StructuralLoss
+from model.blocks import ContourletDiffusion
+from utils.metrics import ImageQualityMetrics
 
-
-class ContourletDiffusion(nn.Module):
-    def __init__(
-        self,
-        in_channels=3,
-        out_channels=3,
-        hidden_channels=64,
-        num_levels=3,
-        temb_dim=64,
-        dropout=0.1,
-        filter_size=5,
-        sigma=1.0,
-        omega_x=0.25,
-        omega_y=0.25,
-        squeeze_ratio=0.3,
-        shortcut=True,
-        trainable=False
-    ):
-        super().__init__()
-
-        self.net = Net(
-            in_channels=in_channels, out_channels=out_channels, hidden_channels=hidden_channels, num_levels=num_levels,
-            temb_dim=temb_dim, dropout=dropout, filter_size=filter_size, sigma=sigma, omega_x=omega_x, omega_y=omega_y,
-            squeeze_ratio=squeeze_ratio, shortcut=shortcut, trainable=trainable
-        )
-
-    def forward(self, x):
-        self.Y, self.Cr, self.Cb = self.rgb2ycrcb(x)
-        self.x_i, self.x_d = self.homo_separate(self.Y)
-        self.o_i = self.unet(self.x_i)
-        self.n_i = self.refine(self.x_i, self.o_i)
-        self.n_Y = self.n_i * self.x_d
-        self.enh_img = self.ycrcb2rgb(self.n_Y, self.Cr, self.Cb)
-        return self.Y, self.Cr, self.Cb, self.x_i, self.x_d, self.o_i, self.n_i, self.n_Y, self.enh_img
 
 
 class ContourletDiffusionLightning(L.LightningModule):
@@ -74,137 +40,84 @@ class ContourletDiffusionLightning(L.LightningModule):
             trainable=hparams['trainable']
         )
 
-        self.spa_loss = L_spa().eval()
-        self.col_loss = L_col().eval()
-        self.exp_loss = L_exp().eval()
-        self.tva_loss = L_tva().eval()
+        self.noise_loss = NoiseLoss()
+        self.freq_loss = FrequencyLoss()
+        self.struc_loss = StructuralLoss()
 
-        self.lambda_spa = hparams["lambda_spa"]
-        self.lambda_col = hparams["lambda_col"]
-        self.lambda_exp = hparams["lambda_exp"]
-        self.lambda_tva = hparams["lambda_tva"]
-
-        self.metric = ImageQualityMetrics(device="cuda")
+        self.metric = ImageQualityMetrics(device=hparams['device'])
 
     def forward(self, x):
         return self.model(x)
 
     def training_step(self, batch, batch_idx):
         x = batch.to(self.device)
-        Y, Cr, Cb, x_i, x_d, o_i, n_i, n_Y, enh_img = self(x)
+        pyramid, subbands, fusion, pred = self(x)
 
-        loss_spa = self.lambda_spa * torch.mean(
-            input=self.spa_loss(enh_img, x)
-        )
-        loss_col = self.lambda_col * torch.mean(
-            input=self.col_loss(enh_img)
-        )
-        loss_exp = self.lambda_exp * torch.mean(
-            input=self.exp_loss(enh_img)
-        )
-        loss_tva = self.lambda_tva * torch.mean(
-            input=self.tva_loss(o_i)
-        )
+        loss_noise = self.noise_loss(pred, x)
+        loss_freq = self.freq_loss(pred)
+        loss_struc = self.struc_loss(pred)
 
         loss_tot = (
-            loss_spa +
-            loss_col +
-            loss_exp +
-            loss_tva
+            loss_noise +
+            loss_freq +
+            loss_struc
         )
 
         self.log_dict(dictionary={
-            "train/1_spa": loss_spa,
-            "train/2_col": loss_col,
-            "train/3_exp": loss_exp,
-            "train/4_tva": loss_tva,
-            "train/5_tot": loss_tot,
+            "train/1_spa": loss_noise,
+            "train/2_col": loss_freq,
+            "train/3_exp": loss_struc,
+            "train/4_tot": loss_tot,
         }, prog_bar=True)
         return loss_tot
 
     def validation_step(self, batch, batch_idx):
         x = batch.to(self.device)
-        Y, Cr, Cb, x_i, x_d, o_i, n_i, n_Y, enh_img = self(x)
+        pyramid, subbands, fusion, pred = self(x)
 
-        loss_spa = self.lambda_spa * torch.mean(
-            input=self.spa_loss(enh_img, x)
-        )
-        loss_col = self.lambda_col * torch.mean(
-            input=self.col_loss(enh_img)
-        )
-        loss_exp = self.lambda_exp * torch.mean(
-            input=self.exp_loss(enh_img)
-        )
-        loss_tva = self.lambda_tva * torch.mean(
-            input=self.tva_loss(o_i)
-        )
+        loss_noise = self.noise_loss(pred, x)
+        loss_freq = self.freq_loss(pred)
+        loss_struc = self.struc_loss(pred)
 
         loss_tot = (
-            loss_exp +
-            loss_spa +
-            loss_col +
-            loss_tva
+            loss_noise +
+            loss_freq +
+            loss_struc
         )
 
         self.log_dict(dictionary={
-            "valid/1_spa": loss_spa,
-            "valid/2_col": loss_col,
-            "valid/3_exp": loss_exp,
-            "valid/4_tva": loss_tva,
-            "valid/5_tot": loss_tot,
+            "valid/1_spa": loss_noise,
+            "valid/2_col": loss_freq,
+            "valid/3_exp": loss_struc,
+            "valid/4_tot": loss_tot,
         }, prog_bar=True)
 
         if batch_idx % 250 == 0:
             self.logger.experiment.add_image(
-                "train/1_input",
+                "valid/1_target",
                 x,
                 self.global_step
             )
             self.logger.experiment.add_image(
-                "train/2_Y",
-                Y,
+                "valid/2_pred",
+                pred,
                 self.global_step
             )
-            self.logger.experiment.add_image(
-                "train/3_Cr",
-                Cr,
-                self.global_step
-            )
-            self.logger.experiment.add_image(
-                "train/4_Cb",
-                Cb,
-                self.global_step
-            )
-            self.logger.experiment.add_image(
-                "train/5_x_i",
-                x_i,
-                self.global_step
-            )
-            self.logger.experiment.add_image(
-                "train/6_x_d",
-                x_d,
-                self.global_step
-            )
-            self.logger.experiment.add_image(
-                "train/7_o_i",
-                o_i,
-                self.global_step
-            )
-            self.logger.experiment.add_image(
-                "train/8_n_i",
-                n_i,
-                self.global_step
-            )
-            self.logger.experiment.add_image(
-                "train/9_n_Y",
-                n_Y,
-                self.global_step
-            )
-            self.logger.experiment.add_image(
-                "train/0_enh_img",
-                enh_img,
-                self.global_step
-            )
+            # self.logger.experiment.add_image(
+            #     "valid/3_pyramid",
+            #     pyramid,
+            #     self.global_step
+            # )
+            # self.logger.experiment.add_image(
+            #     "valid/4_subbands",
+            #     subbands,
+            #     self.global_step
+            # )
+            # self.logger.experiment.add_image(
+            #     "valid/5_fusion",
+            #     fusion,
+            #     self.global_step
+            # )
         return loss_tot
 
     def test_step(self, batch, batch_idx, dataloader_idx=0):
