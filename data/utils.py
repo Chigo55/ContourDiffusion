@@ -1,22 +1,7 @@
-import matplotlib.pyplot as plt
-
 from pathlib import Path
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
-
-def show_batch(images, ncols=8):
-    nimgs = images.shape[0]
-    nrows = (nimgs + ncols - 1) // ncols
-    plt.figure(figsize=(ncols * 3, nrows * 3))
-    for i in range(nimgs):
-        plt.subplot(nrows, ncols, i + 1)
-        plt.imshow(X=F.to_pil_image(pic=images[i]))
-        plt.axis('off')
-        plt.title(label=f"Image {i}")
-    plt.tight_layout()
-    plt.show()
-
 
 class LowLightDataset(Dataset):
     def __init__(self, path, image_size):
