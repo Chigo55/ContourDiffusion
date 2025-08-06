@@ -1,34 +1,19 @@
 import lightning as L
 
 from pathlib import Path
-from PIL import Image
-from torch.utils.data import Dataset, DataLoader, ConcatDataset
+from torch.utils.data import DataLoader, ConcatDataset
 
+from data.utils import LowLightDataset
 
-class CustomDataset(Dataset):
-    def __init__(self, path, transform):
-        super().__init__()
-        self.path = Path(path)
-        self.transform = transform
-        self.data = list(self.path.rglob(pattern='*.*'))
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, index):
-        image = Image.open(fp=self.data[index]).convert(mode="RGB")
-        return self.transform(image)
-
-
-class CustomDataModule(L.LightningDataModule):
-    def __init__(self, train_dir, valid_dir, infer_dir, bench_dir, transform, batch_size=32, num_workers=4):
+class LowLightDataModule(L.LightningDataModule):
+    def __init__(self, train_dir, valid_dir, bench_dir, infer_dir, image_size, batch_size=32, num_workers=4):
         super().__init__()
         self.train_dir = Path(train_dir)
         self.valid_dir = Path(valid_dir)
-        self.infer_dir = Path(infer_dir)
         self.bench_dir = Path(bench_dir)
+        self.infer_dir = Path(infer_dir)
 
-        self.transform = transform
+        self.image_size = image_size
         self.batch_size = batch_size
         self.num_workers = num_workers
 
@@ -43,9 +28,9 @@ class CustomDataModule(L.LightningDataModule):
         for folder in path.iterdir():
             if folder.is_dir():
                 datasets.append(
-                    CustomDataset(
+                    LowLightDataset(
                         path=folder,
-                        transform=self.transform
+                        image_size=self.image_size
                     )
                 )
         return datasets
