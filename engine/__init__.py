@@ -1,75 +1,81 @@
-import os
-import torch
-from typing import Optional
+from typing import Optional, Type, List
 
-from lightning import Trainer, LightningModule
-from lightning.pytorch.callbacks import (
-    Callback, ModelCheckpoint, EarlyStopping, LearningRateMonitor
-)
+from lightning import Trainer, LightningModule, seed_everything
+from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping, LearningRateMonitor, Callback
 from lightning.pytorch.loggers import TensorBoardLogger
 
-from engine.trainer import LightningTrainer
-from engine.validater import LightningValidater
-from engine.benchmarker import LightningBenchmarker
-from engine.inferencer import LightningInferencer
-
-
-class DetectNanCallback(Callback):
-    def __init__(self):
-        super().__init__()
-        self.last_ckpt_path = None
-
-    def on_after_backward(self, trainer, pl_module):
-        """
-        backward가 끝난 직후에 호출됩니다.
-        grad에 NaN이 있는지 체크하고, 있을 경우 업데이트 이전의 파라미터 상태를 저장합니다.
-        """
-        for name, param in pl_module.named_parameters():
-            if param.grad is not None and torch.isnan(input=param.grad).any():
-                log_dir = trainer.log_dir
-                ckpt_path = os.path.join(log_dir, "pre_nan_ckpt.ckpt")
-                # 이 시점에는 파라미터가 아직 업데이트되지 않았으므로, NaN 이전 모델이 저장됩니다.
-                trainer.save_checkpoint(filepath=ckpt_path)
-                print(
-                    f"[DetectNanCallback] NaN 발생한 grad 감지 → 이전 파라미터로 체크포인트 저장: {ckpt_path}")
-                self.last_ckpt_path = ckpt_path
-                # 그 즉시 학습을 멈추고 에러를 띄웁니다.
-                raise RuntimeError(
-                    f"[DetectNanCallback] NaN in gradient of {name}")
+from engine.runner import _BaseRunner, LightningTrainer, LightningValidater, LightningBenchmarker, LightningInferencer
 
 
 class LightningEngine:
-    def __init__(self, model: LightningModule, hparams: dict, ckpt: Optional[str] = None):
+    """
+    A high-level engine to orchestrate the training, validation, benchmarking, and inference
+    processes using PyTorch Lightning. It sets up the trainer, logger, and callbacks based on
+    hyperparameters and manages different execution modes through dedicated runner classes.
+    """
+    def __init__(self, model: Type[LightningModule], hparams: dict, checkpoint_path: Optional[str] = None) -> None:
+        """
+        Initializes the LightningEngine.
+
+        Args:
+            model (Type[LightningModule]): The LightningModule class to be instantiated.
+            hparams (dict): A dictionary containing all hyperparameters for the model,
+                trainer, and data.
+            checkpoint_path (Optional[str], optional): Path to a checkpoint to resume
+                training or for validation/inference. Defaults to None.
+        """
         self.model = model
         self.hparams = hparams
-        self.ckpt = ckpt
-        self.nan_callback = DetectNanCallback()
+        self.checkpoint_path = checkpoint_path
 
-        # --- 로깅 설정
+        seed_everything(seed=self.hparams["seed"], workers=True)
+
         self.logger = self._build_logger()
-
-        # --- 콜백 정의
         self.callbacks = self._build_callbacks()
 
-        # --- Trainer 정의
-        self.trainer = Trainer(
-            max_epochs=hparams["epochs"],
-            accelerator="gpu",
-            devices=1,
-            precision="16-mixed",
+        self.trainer = self._set_build_trainer()
+
+    def _set_build_trainer(self) -> Trainer:
+        """
+        Configures and initializes the PyTorch Lightning Trainer.
+
+        Returns:
+            Trainer: An instance of the `lightning.Trainer` configured with the
+                provided hyperparameters.
+        """
+        return Trainer(
+            max_epochs=self.hparams["epochs"],
+            accelerator=self.hparams["accelerator"],
+            devices=self.hparams["devices"],
+            precision=self.hparams["precision"],
+            log_every_n_steps=self.hparams["log_every_n_steps"],
+            gradient_clip_val=self.hparams["gradient_clip_val"],
             logger=self.logger,
             callbacks=self.callbacks,
-            log_every_n_steps=5,
-            gradient_clip_val=0.5,
         )
 
-    def _build_logger(self):
+    def _build_logger(self) -> TensorBoardLogger:
+        """
+        Initializes the TensorBoard logger.
+
+        Returns:
+            TensorBoardLogger: An instance of the logger for tracking experiments.
+        """
         return TensorBoardLogger(
             save_dir=self.hparams["log_dir"],
             name=self.hparams["experiment_name"]
         )
 
-    def _build_callbacks(self):
+    def _build_callbacks(self) -> List[Callback]:
+        """
+        Initializes the list of PyTorch Lightning callbacks.
+
+        This includes callbacks for model checkpointing, early stopping, and
+        learning rate monitoring.
+
+        Returns:
+            List[Callback]: A list of configured callback instances.
+        """
         return [
             ModelCheckpoint(
                 monitor="valid/5_tot",
@@ -89,43 +95,47 @@ class LightningEngine:
                 verbose=True,
             ),
             LearningRateMonitor(logging_interval="step"),
-            DetectNanCallback(),
         ]
 
-    def train(self):
-        LightningTrainer(
+    def _create_and_run_runner(self, runner_class: Type[_BaseRunner]) -> None:
+        """
+        Creates an instance of a runner class and executes its `run` method.
+
+        This is a helper method to reduce code duplication in the `train`, `valid`,
+        `bench`, and `infer` methods.
+
+        Args:
+            runner_class (Type[_BaseRunner]): The runner class to instantiate (e.g.,
+                LightningTrainer, LightningValidater).
+        """
+        runner = runner_class(
             model=self.model,
             trainer=self.trainer,
             hparams=self.hparams,
-            ckpt=self.ckpt
-        ).run()
+            checkpoint_path=self.checkpoint_path
+        )
+        runner.run()
 
-    def valid(self):
-        LightningValidater(
-            model=self.model,
-            trainer=self.trainer,
-            hparams=self.hparams,
-            ckpt=self.ckpt
-        ).run()
+    def train(self) -> None:
+        """
+        Starts the training process by creating and running a LightningTrainer.
+        """
+        self._create_and_run_runner(runner_class=LightningTrainer)
 
-    def bench(self):
-        LightningBenchmarker(
-            model=self.model,
-            trainer=self.trainer,
-            hparams=self.hparams,
-            ckpt=self.ckpt
-        ).run()
+    def valid(self) -> None:
+        """
+        Starts the validation process by creating and running a LightningValidater.
+        """
+        self._create_and_run_runner(runner_class=LightningValidater)
 
-    def infer(self):
-        LightningInferencer(
-            model=self.model,
-            trainer=self.trainer,
-            hparams=self.hparams,
-            ckpt=self.ckpt
-        ).run()
+    def bench(self) -> None:
+        """
+        Starts the benchmarking process by creating and running a LightningBenchmarker.
+        """
+        self._create_and_run_runner(runner_class=LightningBenchmarker)
 
-    def update_ckpt_from_nan(self):
-        """NaN 콜백에서 저장된 ckpt 경로가 있다면 그것으로 업데이트"""
-        if self.nan_callback.last_ckpt_path is not None:
-            self.ckpt = self.nan_callback.last_ckpt_path
-            print(f"[Engine] NaN 발생 후 체크포인트 로드 경로 갱신: {self.ckpt}")
+    def infer(self) -> None:
+        """
+        Starts the inference process by creating and running a LightningInferencer.
+        """
+        self._create_and_run_runner(runner_class=LightningInferencer)
