@@ -16,7 +16,11 @@ class LowLightDataset(Dataset):
     'low' and 'high'. The filenames in 'low' and 'high' are expected to match.
     """
 
-    def __init__(self, path: Union[str, Path], image_size: int) -> None:
+    def __init__(
+        self,
+        path: Union[str, Path],
+        image_size: int
+    ) -> None:
         """
         Initializes the LowLightDataset.
 
@@ -31,7 +35,7 @@ class LowLightDataset(Dataset):
         self.image_size = image_size
         self.transform = transforms.Compose(
             transforms=[
-                transforms.Resize(size=self.image_size),
+                transforms.Resize(size=(self.image_size, self.image_size)),
                 transforms.ToTensor(),
             ]
         )
