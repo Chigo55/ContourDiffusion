@@ -55,8 +55,8 @@ class _BaseRunner(ABC):
         datamodule = LowLightDataModule(
             train_dir=self.hparams["train_data_path"],
             valid_dir=self.hparams["valid_data_path"],
-            infer_dir=self.hparams["infer_data_path"],
             bench_dir=self.hparams["bench_data_path"],
+            infer_dir=self.hparams["infer_data_path"],
             image_size=self.hparams["image_size"],
             batch_size=self.hparams["batch_size"],
             num_workers=self.hparams["num_workers"],
