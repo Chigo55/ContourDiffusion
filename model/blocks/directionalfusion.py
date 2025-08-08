@@ -1,23 +1,33 @@
 import torch
 import torch.nn as nn
-
-from model.blocks import SWISH
+from typing import List, Tuple, Union
 
 
 class DepthwiseSeparableConv(nn.Module):
     """
-    DepthwiseSeparableConv applies depthwise convolution followed by pointwise convolution
-    for efficient spatial and channel-wise feature extraction.
-
-    Args:
-        in_channels (int): Number of input channels.
-        out_channels (int): Number of output channels.
-        kernel_size (int | tuple[int, int]): Convolution window size.
-        stride (int | tuple[int, int]): Window step size.
-        padding (int | tuple[int, int]): Zero-padding size.
-        dilation (int | tuple[int, int]): Spacing between kernel elements.
+    Applies depthwise convolution followed by pointwise convolution for efficient
+    spatial and channel-wise feature extraction.
     """
-    def __init__(self, in_channels, out_channels, kernel_size, stride, padding, dilation):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: Union[int, Tuple[int, int]],
+        stride: Union[int, Tuple[int, int]],
+        padding: Union[int, Tuple[int, int]],
+        dilation: Union[int, Tuple[int, int]],
+    ) -> None:
+        """
+        Initializes the DepthwiseSeparableConv module.
+
+        Args:
+            in_channels (int): Number of input channels.
+            out_channels (int): Number of output channels.
+            kernel_size (Union[int, Tuple[int, int]]): Convolution window size.
+            stride (Union[int, Tuple[int, int]]): Window step size.
+            padding (Union[int, Tuple[int, int]]): Zero-padding size.
+            dilation (Union[int, Tuple[int, int]]): Spacing between kernel elements.
+        """
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -49,32 +59,42 @@ class DepthwiseSeparableConv(nn.Module):
             nn.BatchNorm2d(
                 num_features=out_channels
             ),
-            SWISH()
+            nn.SiLU()
         )
 
-    def forward(self, x):
+    def forward(
+        self,
+        input: torch.Tensor
+    ) -> torch.Tensor:
         """
-        Forward pass of DepthwiseSeparableConv.
+        Applies the depthwise separable convolution to the input tensor.
 
         Args:
-            x (torch.Tensor): Input tensor of shape (B, in_channels, H, W).
+            input (torch.Tensor): Input tensor of shape `(B, in_channels, H, W)`.
 
         Returns:
-            torch.Tensor: Output tensor of shape (B, out_channels, H, W).
+            torch.Tensor: Output tensor of shape `(B, out_channels, H, W)`.
         """
-        x = self.ds_block(x)
-        return x
+        return self.ds_block(input)
 
 
 class DilatedResblock(nn.Module):
     """
-    DilatedResblock applies a series of dilated DepthwiseSeparableConv layers with residual connection.
-
-    Args:
-        in_channels (int): Number of input channels.
-        out_channels (int): Number of output channels.
+    Applies a series of dilated DepthwiseSeparableConv layers with a residual
+    connection.
     """
-    def __init__(self, in_channels, out_channels):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int
+    ) -> None:
+        """
+        Initializes the DilatedResblock module.
+
+        Args:
+            in_channels (int): Number of input channels.
+            out_channels (int): Number of output channels.
+        """
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -135,32 +155,42 @@ class DilatedResblock(nn.Module):
             )
         )
 
-    def forward(self, x):
+    def forward(
+        self,
+        input: torch.Tensor
+    ) -> torch.Tensor:
         """
-        Forward pass of the DilatedResblock.
+        Applies the dilated residual block to the input tensor.
 
         Args:
-            x (torch.Tensor): Input tensor of shape (B, in_channels, H, W).
+            input (torch.Tensor): Input tensor of shape `(B, in_channels, H, W)`.
 
         Returns:
-            torch.Tensor: Output tensor of shape (B, out_channels, H, W).
+            torch.Tensor: Output tensor of shape `(B, out_channels, H, W)`.
         """
         if self.in_channels == self.out_channels:
-            x = self.dr_block(x) + x
+            return self.dr_block(input) + input
         else:
-            x = self.dr_block(x) + self.skip(x)
-        return x
+            return self.dr_block(input) + self.skip(input)
 
 
 class SqueezeExcitationBlock(nn.Module):
     """
-    SqueezeExcitationBlock applies channel-wise attention using the Squeeze-and-Excitation mechanism.
-
-    Args:
-        in_channels (int): Number of input channels.
-        squeeze_ratio (float): Ratio to compute squeeze channels from input channels.
+    Applies channel-wise attention using the Squeeze-and-Excitation mechanism.
     """
-    def __init__(self, in_channels, squeeze_ratio):
+    def __init__(
+        self,
+        in_channels: int,
+        squeeze_ratio: float
+    ) -> None:
+        """
+        Initializes the SqueezeExcitationBlock module.
+
+        Args:
+            in_channels (int): Number of input channels.
+            squeeze_ratio (float): Ratio to compute squeeze channels from input
+                channels.
+        """
         super().__init__()
         self.in_channels = in_channels
         self.squeeze_ratio = squeeze_ratio
@@ -183,32 +213,46 @@ class SqueezeExcitationBlock(nn.Module):
             nn.Sigmoid()
         )
 
-    def forward(self, x):
+    def forward(
+        self,
+        input: torch.Tensor
+    ) -> torch.Tensor:
         """
-        Forward pass of the SqueezeExcitationBlock.
+        Applies the Squeeze-and-Excitation block to the input tensor.
 
         Args:
-            x (torch.Tensor): Input tensor of shape (B, C, H, W).
+            input (torch.Tensor): Input tensor of shape `(B, C, H, W)`.
 
         Returns:
-            torch.Tensor: Output tensor of shape (B, C, H, W), after applying channel-wise scaling.
+            torch.Tensor: Output tensor of shape `(B, C, H, W)`, after applying
+                channel-wise scaling.
         """
-        x = self.se_block(x) * x
-        return x
+        return self.se_block(input) * input
 
 
 class IntraLevelFusionBlock(nn.Module):
     """
-    IntraLevelFusionBlock fuses multiple directional sub-band feature maps within a single resolution level
-    using Squeeze-and-Excitation, Depthwise Separable Convolution, and Dilated Residual Block.
-
-    Args:
-        in_channels (int): Number of input channels per directional sub-band.
-        out_channels (int): Number of output channels after fusion.
-        num_bands (int): Number of directional sub-bands to be fused.
-        squeeze_ratio (float): Ratio to compute squeeze channels from total input channels.
+    Fuses multiple directional sub-band feature maps within a single resolution
+    level using Squeeze-and-Excitation, Depthwise Separable Convolution, and a
+    Dilated Residual Block.
     """
-    def __init__(self, in_channels, out_channels, num_bands, squeeze_ratio):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        num_bands: int,
+        squeeze_ratio: float
+    ) -> None:
+        """
+        Initializes the IntraLevelFusionBlock module.
+
+        Args:
+            in_channels (int): Number of input channels per directional sub-band.
+            out_channels (int): Number of output channels after fusion.
+            num_bands (int): Number of directional sub-bands to be fused.
+            squeeze_ratio (float): Ratio to compute squeeze channels from total
+                input channels.
+        """
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -235,34 +279,45 @@ class IntraLevelFusionBlock(nn.Module):
             )
         )
 
-    def forward(self, subband_list):
+    def forward(
+        self,
+        subband_list: List[torch.Tensor]
+    ) -> torch.Tensor:
         """
-        Forward pass of the IntraLevelFusionBlock.
+        Fuses a list of directional sub-band tensors.
 
         Args:
-            subband_list (list[torch.Tensor]): List of directional sub-band tensors.
-                Each tensor has shape (B, in_channels, H, W).
+            subband_list (List[torch.Tensor]): List of directional sub-band tensors.
+                Each tensor has shape `(B, in_channels, H, W)`.
 
         Returns:
-            torch.Tensor: Fused feature map of shape (B, out_channels, H, W).
+            torch.Tensor: Fused feature map of shape `(B, out_channels, H, W)`.
         """
-        x = torch.cat(tensors=subband_list, dim=1)
-        x = self.if_block(x)
-        return x
+        return self.if_block(torch.cat(tensors=subband_list, dim=1))
 
 
 class DirectionalFusion(nn.Module):
     """
-    DirectionalFusion fuses directional sub-band feature maps across multiple resolution levels
-    using IntraLevelFusionBlock for each level in a Laplacian pyramid structure.
-
-    Args:
-        in_channels (int): Number of input channels per directional sub-band.
-        hidden_channels (int): Base number of hidden channels used for fusion.
-        num_levels (int): Number of Laplacian pyramid levels to process.
-        squeeze_ratio (float): Ratio to compute squeeze channels from total input channels in each IntraLevelFusionBlock.
+    Fuses directional sub-band feature maps across multiple resolution levels
+    using an `IntraLevelFusionBlock` for each level.
     """
-    def __init__(self, in_channels, hidden_channels, num_levels, squeeze_ratio):
+    def __init__(
+        self,
+        in_channels: int,
+        hidden_channels: int,
+        num_levels: int,
+        squeeze_ratio: float
+    ) -> None:
+        """
+        Initializes the DirectionalFusion module.
+
+        Args:
+            in_channels (int): Number of input channels per directional sub-band.
+            hidden_channels (int): Base number of hidden channels used for fusion.
+            num_levels (int): Number of Laplacian pyramid levels to process.
+            squeeze_ratio (float): Ratio for Squeeze-and-Excitation blocks in each
+                `IntraLevelFusionBlock`.
+        """
         super().__init__()
         self.in_channels = in_channels
         self.hidden_channels = hidden_channels
@@ -281,16 +336,21 @@ class DirectionalFusion(nn.Module):
                 squeeze_ratio=squeeze_ratio
             )
 
-    def forward(self, subbands):
+    def forward(
+        self,
+        subbands: List[List[torch.Tensor]]
+    ) -> List[torch.Tensor]:
         """
-        Forward pass of the DirectionalFusion module.
+        Fuses directional sub-bands from multiple resolution levels.
 
         Args:
-            subbands (list[list[torch.Tensor]]): Directional sub-bands per resolution level.
-                Each sublist contains tensors of shape (B, in_channels, H, W).
+            subbands (List[List[torch.Tensor]]): A list of lists, where each inner
+                list contains directional sub-band tensors for a specific resolution
+                level. Each tensor has shape `(B, in_channels, H, W)`.
 
         Returns:
-            list[torch.Tensor]: Fused feature maps per level, ordered from finest to coarsest.
+            List[torch.Tensor]: A list of fused feature maps, one for each level,
+                ordered from finest to coarsest resolution.
         """
         fused_features = []
         for i, (subband, fusion_block) in enumerate(iterable=zip(subbands, self.fusion_blocks.values())):
