@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import List, Tuple
+from typing import List, Tuple
 
 
 class LaplacianPyramid(nn.Module):
@@ -31,7 +32,6 @@ class LaplacianPyramid(nn.Module):
             sigma (float): The standard deviation of the Gaussian filter.
         """
         super().__init__()
-        self.in_channels = in_channels
         self.num_levels = num_levels
         self.filter_size = filter_size
         self.sigma = sigma
@@ -50,6 +50,7 @@ class LaplacianPyramid(nn.Module):
             in_channels (int): Number of output channels for the filter.
             filter_size (int): Size of the Gaussian filter (must be odd).
             sigma (float): Standard deviation of the Gaussian distribution.
+            channels (int): Number of output channels for the filter.
 
         Returns:
             torch.Tensor: A tensor of shape `(in_channels, 1, filter_size, filter_size)` containing
@@ -65,9 +66,13 @@ class LaplacianPyramid(nn.Module):
         filter = filter / torch.sum(input=filter)
 
         filter = filter.view(1, 1, filter_size, filter_size)
-        filter = filter.repeat(in_channels, 1, 1, 1)
+        filter = filter.repeat(channels, 1, 1, 1)
         return filter
 
+    def forward(
+        self,
+        input: torch.Tensor
+    ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
     def forward(
         self,
         input: torch.Tensor
@@ -77,6 +82,7 @@ class LaplacianPyramid(nn.Module):
 
         Args:
             input (torch.Tensor): Input tensor of shape `(B, C, H, W)`.
+            input (torch.Tensor): Input tensor of shape `(B, C, H, W)`.
 
         Returns:
             Tuple[List[torch.Tensor], List[torch.Tensor]]: A tuple containing two lists:
@@ -84,7 +90,13 @@ class LaplacianPyramid(nn.Module):
                   pyramid level, from finest to coarsest.
                 - laplacian (List[torch.Tensor]): A list of corresponding band-pass detail
                   images (the Laplacian pyramid levels).
+            Tuple[List[torch.Tensor], List[torch.Tensor]]: A tuple containing two lists:
+                - pyramid (List[torch.Tensor]): A list of low-pass residual images at each
+                  pyramid level, from finest to coarsest.
+                - laplacian (List[torch.Tensor]): A list of corresponding band-pass detail
+                  images (the Laplacian pyramid levels).
         """
+        current = input
         current = input
         pyramid, laplacian = [], []
 
@@ -92,6 +104,9 @@ class LaplacianPyramid(nn.Module):
             p = current
             blurred = F.conv2d(input=current, weight=self.filter, padding=self.filter_size // 2, groups=self.in_channels)
             down = F.avg_pool2d(input=blurred, kernel_size=2, stride=2)
+            up = F.interpolate(input=down, size=current.shape[-2:], mode='bilinear', align_corners=False)
+            l = current - up
+            current = down
             up = F.interpolate(input=down, size=current.shape[-2:], mode='bilinear', align_corners=False)
             l = current - up
             current = down
@@ -117,6 +132,21 @@ class DirectionalFilterBank(nn.Module):
     ) -> None:
         """
         Initializes the DirectionalFilterBank module.
+    Applies directional frequency filtering at multiple scales using fan-shaped
+    filters, shear transforms, and recursive binary filtering to decompose an
+    image into directional sub-bands.
+    """
+    def __init__(
+        self,
+        in_channels: int,
+        num_levels: int,
+        filter_size: int,
+        sigma: float,
+        omega_x: float,
+        omega_y: float
+    ) -> None:
+        """
+        Initializes the DirectionalFilterBank module.
 
         Args:
             in_channels (int): Number of input/output channels.
@@ -127,19 +157,19 @@ class DirectionalFilterBank(nn.Module):
             omega_y (float): Modulation frequency in the y-direction.
         """
         super().__init__()
-        self.in_channels = in_channels
         self.num_levels = num_levels
         self.filter_size = filter_size
         self.sigma = sigma
         self.omega_x = omega_x
         self.omega_y = omega_y
+        self.channels = channels
         self.register_buffer(
             name='filter',
             tensor=self._fan_filter(
                 filter_size=filter_size,
                 sigma=sigma, omega_x=omega_x,
                 omega_y=omega_y,
-                in_channels=in_channels
+                channels=channels
             )
         )
 
@@ -156,6 +186,7 @@ class DirectionalFilterBank(nn.Module):
             in_channels (int): Number of channels.
             filter_size (int): Filter size (must be odd).
             sigma (float): Gaussian standard deviation.
+            channels (int): Number of channels.
 
         Returns:
             torch.Tensor: Low-pass filter tensor of shape `(in_channels, 1, filter_size, filter_size)`.
@@ -170,9 +201,13 @@ class DirectionalFilterBank(nn.Module):
         filter = filter / torch.sum(input=filter)
 
         filter = filter.view(1, 1, filter_size, filter_size)
-        filter = filter.repeat(in_channels, 1, 1, 1)
+        filter = filter.repeat(channels, 1, 1, 1)
         return filter
 
+    def _highpass_filter(
+        self,
+        lp_filter: torch.Tensor
+    ) -> torch.Tensor:
     def _highpass_filter(
         self,
         lp_filter: torch.Tensor
@@ -213,7 +248,7 @@ class DirectionalFilterBank(nn.Module):
         Returns:
             torch.Tensor: Fan filter tensor of shape `(in_channels, 1, filter_size, filter_size)`.
         """
-        lp_filter = self._lowpass_filter(filter_size=filter_size, sigma=sigma, in_channels=in_channels)
+        lp_filter = self._lowpass_filter(filter_size=filter_size, sigma=sigma, channels=channels)
         hp_filter = self._highpass_filter(lp_filter=lp_filter)
         H, W = hp_filter.shape[-2:]
         coords_y = torch.arange(end=H, dtype=torch.float32) - H // 2
@@ -228,15 +263,22 @@ class DirectionalFilterBank(nn.Module):
         self,
         input: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _apply_shear(
+        self,
+        input: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Apply positive and negative shear transforms to input tensor.
 
         Args:
             input (torch.Tensor): Input of shape `(B, C, H, W)`.
+            input (torch.Tensor): Input of shape `(B, C, H, W)`.
 
         Returns:
             Tuple[torch.Tensor, torch.Tensor]: Sheared tensors (positive, negative).
         """
+        B, C, H, W = input.shape
+        device = input.device
         B, C, H, W = input.shape
         device = input.device
         shear_matrix_pos = torch.tensor(data=[[1, 1, 0], [0, 1, 0]], device=device, dtype=torch.float32)
@@ -246,7 +288,11 @@ class DirectionalFilterBank(nn.Module):
 
         grid_pos = F.affine_grid(theta=shear_matrix_pos, size=input.size(), align_corners=False)
         grid_neg = F.affine_grid(theta=shear_matrix_neg, size=input.size(), align_corners=False)
+        grid_pos = F.affine_grid(theta=shear_matrix_pos, size=input.size(), align_corners=False)
+        grid_neg = F.affine_grid(theta=shear_matrix_neg, size=input.size(), align_corners=False)
 
+        sheared_pos=  F.grid_sample(input=input, grid=grid_pos, align_corners=False)
+        sheared_neg=  F.grid_sample(input=input, grid=grid_neg, align_corners=False)
         sheared_pos=  F.grid_sample(input=input, grid=grid_pos, align_corners=False)
         sheared_neg=  F.grid_sample(input=input, grid=grid_neg, align_corners=False)
         return sheared_pos, sheared_neg
@@ -255,10 +301,15 @@ class DirectionalFilterBank(nn.Module):
         self,
         input: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _dfb(
+        self,
+        input: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Perform one-stage directional filtering with fan filters.
 
         Args:
+            input (torch.Tensor): Input tensor of shape `(B, C, H, W)`.
             input (torch.Tensor): Input tensor of shape `(B, C, H, W)`.
 
         Returns:
@@ -274,21 +325,35 @@ class DirectionalFilterBank(nn.Module):
         input: torch.Tensor,
         level: int
     ) -> List[torch.Tensor]:
+    def _binary_dfb(
+        self,
+        input: torch.Tensor,
+        level: int
+    ) -> List[torch.Tensor]:
         """
         Recursively apply directional filter bank to decompose into subbands.
 
         Args:
             input (torch.Tensor): Input tensor of shape `(B, C, H, W)`.
+            input (torch.Tensor): Input tensor of shape `(B, C, H, W)`.
             level (int): Remaining decomposition levels.
 
         Returns:
+            List[torch.Tensor]: List of `2**level` directional subbands.
             List[torch.Tensor]: List of `2**level` directional subbands.
         """
         if level == 0:
             return [input]
         d1, d2 = self._dfb(input=input)
         return self._binary_dfb(input=d1, level=level - 1) + self._binary_dfb(input=d2, level=level - 1)
+            return [input]
+        d1, d2 = self._dfb(input=input)
+        return self._binary_dfb(input=d1, level=level - 1) + self._binary_dfb(input=d2, level=level - 1)
 
+    def forward(
+        self,
+        input: torch.Tensor
+    ) -> List[torch.Tensor]:
     def forward(
         self,
         input: torch.Tensor
@@ -298,15 +363,36 @@ class DirectionalFilterBank(nn.Module):
 
         Args:
             input (torch.Tensor): Input tensor of shape `(B, C, H, W)`.
+            input (torch.Tensor): Input tensor of shape `(B, C, H, W)`.
 
         Returns:
             List[torch.Tensor]: `2**num_levels` directional subband tensors.
+            List[torch.Tensor]: `2**num_levels` directional subband tensors.
         """
+        return self._binary_dfb(input=input, level=self.num_levels)
         return self._binary_dfb(input=input, level=self.num_levels)
 
 
 class ContourletTransform(nn.Module):
     """
+    Performs a multi-scale and multi-directional decomposition of an image using
+    the Contourlet Transform.
+
+    This is achieved by first applying a Laplacian Pyramid decomposition to separate
+    the image into different frequency bands, followed by applying a Directional
+    Filter Bank to each of the detail (band-pass) images.
+    """
+    def __init__(
+        self,
+        in_channels: int,
+        num_levels: int,
+        filter_size: int,
+        sigma: float,
+        omega_x: float,
+        omega_y: float
+    ) -> None:
+        """
+        Initializes the ContourletTransform module.
     Performs a multi-scale and multi-directional decomposition of an image using
     the Contourlet Transform.
 
@@ -335,26 +421,30 @@ class ContourletTransform(nn.Module):
             omega_y (float): Modulation frequency in the y-direction.
         """
         super().__init__()
-        self.in_channels = in_channels
         self.num_levels = num_levels
         self.filter_size = filter_size
         self.sigma = sigma
         self.omega_x = omega_x
         self.omega_y = omega_y
+        self.channels = channels
 
-        self.lp = LaplacianPyramid(in_channels=in_channels, num_levels=num_levels, filter_size=filter_size, sigma=sigma)
+        self.lp = LaplacianPyramid(num_levels=num_levels, filter_size=filter_size, sigma=sigma, channels=channels)
         self.dfb = nn.ModuleDict()
 
         for level in range(1, num_levels + 1):
             self.dfb[f"dfb{level}"] = DirectionalFilterBank(
-                in_channels=in_channels,
                 num_levels=level,
                 filter_size=filter_size,
                 sigma=sigma,
                 omega_x=omega_x,
                 omega_y=omega_y,
+                channels=channels
             )
 
+    def forward(
+        self,
+        input: torch.Tensor
+    ) -> Tuple[List[torch.Tensor], List[List[torch.Tensor]]]:
     def forward(
         self,
         input: torch.Tensor
@@ -364,6 +454,7 @@ class ContourletTransform(nn.Module):
 
         Args:
             input (torch.Tensor): Input tensor of shape `(B, C, H, W)`.
+            input (torch.Tensor): Input tensor of shape `(B, C, H, W)`.
 
         Returns:
             Tuple[List[torch.Tensor], List[List[torch.Tensor]]]: A tuple containing:
@@ -371,7 +462,13 @@ class ContourletTransform(nn.Module):
                   Laplacian pyramid, from finest to coarsest scale.
                 - subbands (List[List[torch.Tensor]]): A list of lists, where each inner
                   list contains the directional sub-band coefficients for a specific scale.
+            Tuple[List[torch.Tensor], List[List[torch.Tensor]]]: A tuple containing:
+                - pyramid (List[torch.Tensor]): The low-pass residual images from the
+                  Laplacian pyramid, from finest to coarsest scale.
+                - subbands (List[List[torch.Tensor]]): A list of lists, where each inner
+                  list contains the directional sub-band coefficients for a specific scale.
         """
+        pyramid, laplacian = self.lp(input=input)
         pyramid, laplacian = self.lp(input=input)
         subbands = []
 

@@ -175,6 +175,69 @@ class ContourletDiffusionLightning(L.LightningModule):
             "train/3_struc_loss": loss_struc,
             "train/4_total_loss": loss_tot,
         }, prog_bar=True)
+
+        if torch.isnan(input=loss_spa):
+            print("LOSS SPA IS NAN!")
+        if torch.isnan(input=loss_col):
+            print("LOSS COL IS NAN!")
+        if torch.isnan(input=loss_exp):
+            print("LOSS EXP IS NAN!")
+        if torch.isnan(input=loss_tva):
+            print("LOSS TVA IS NAN!")
+        if torch.isnan(input=loss_tot):
+            print("LOSS TOT IS NAN!")
+
+        if batch_idx % 250 == 0:
+            self.logger.experiment.add_images(
+                "train/1_input",
+                x,
+                self.global_step
+            )
+            self.logger.experiment.add_images(
+                "train/2_Y",
+                Y,
+                self.global_step
+            )
+            self.logger.experiment.add_images(
+                "train/3_Cr",
+                Cr,
+                self.global_step
+            )
+            self.logger.experiment.add_images(
+                "train/4_Cb",
+                Cb,
+                self.global_step
+            )
+            self.logger.experiment.add_images(
+                "train/5_x_i",
+                x_i,
+                self.global_step
+            )
+            self.logger.experiment.add_images(
+                "train/6_x_d",
+                x_d,
+                self.global_step
+            )
+            self.logger.experiment.add_images(
+                "train/7_o_i",
+                o_i,
+                self.global_step
+            )
+            self.logger.experiment.add_images(
+                "train/8_n_i",
+                n_i,
+                self.global_step
+            )
+            self.logger.experiment.add_images(
+                "train/9_n_Y",
+                n_Y,
+                self.global_step
+            )
+            self.logger.experiment.add_images(
+                "train/0_enh_img",
+                enh_img,
+                self.global_step
+            )
         return loss_tot
 
     def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
@@ -338,12 +401,13 @@ class ContourletDiffusionLightning(L.LightningModule):
                 eps=eps,
                 weight_decay=weight_decay
             )
-        elif optim_name == "adamax":
-            return Adamax(
+        elif optim_name == "rmsprop":
+            return RMSprop(
                 params=self.parameters(),
                 lr=lr,
                 betas=self.hparam.get('betas', (0.9, 0.999)),
                 eps=eps,
+                momentum=self.hparams.get('momentum', 0.9),
                 weight_decay=weight_decay
             )
         elif optim_name == "adagrad":
@@ -361,6 +425,13 @@ class ContourletDiffusionLightning(L.LightningModule):
                 rho=self.hparam.get('rho', 0.9),
                 eps=eps,
                 weight_decay=weight_decay
+            )
+        elif optim_name == "rprop":
+            return Rprop(
+                params=self.parameters(),
+                lr=lr,
+                etas=self.hparams.get('etas', (0.5, 1.2)),
+                step_sizes=self.hparams.get('step_sizes', (1e-9, 50))
             )
         elif optim_name == "lbfgs":
             return LBFGS(
