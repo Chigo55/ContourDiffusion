@@ -184,6 +184,3 @@ data/4_infer/*
 !data/4_infer/*.gitkeep
 data/database/*
 !data/database/*.gitkeep
-
-*.sh
-test/
