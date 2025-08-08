@@ -158,6 +158,16 @@ class ContourletDiffusionLightning(L.LightningModule):
                 pred,
                 self.global_step
             )
+            self.logger.experiment.add_images(
+                "train/3_noisy_img",
+                noisy_img,
+                self.global_step
+            )
+            self.logger.experiment.add_images(
+                "train/4_epsilon",
+                epsilon,
+                self.global_step
+            )
 
         self.log_dict(dictionary={
             "train/1_noise_loss": loss_noise,
