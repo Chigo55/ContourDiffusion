@@ -13,7 +13,12 @@ class LightningEngine:
     processes using PyTorch Lightning. It sets up the trainer, logger, and callbacks based on
     hyperparameters and manages different execution modes through dedicated runner classes.
     """
-    def __init__(self, model: Type[LightningModule], hparams: dict, checkpoint_path: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        model: Type[LightningModule],
+        hparams: dict,
+        checkpoint_path: Optional[str] = None
+    ) -> None:
         """
         Initializes the LightningEngine.
 
@@ -97,7 +102,10 @@ class LightningEngine:
             LearningRateMonitor(logging_interval="step"),
         ]
 
-    def _create_and_run_runner(self, runner_class: Type[_BaseRunner]) -> None:
+    def _create_and_run_runner(
+        self,
+        runner_class: Type[_BaseRunner]
+    ) -> None:
         """
         Creates an instance of a runner class and executes its `run` method.
 
