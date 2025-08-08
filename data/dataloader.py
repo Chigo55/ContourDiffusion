@@ -50,7 +50,10 @@ class LowLightDataModule(L.LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
 
-    def setup(self, stage: Optional[str] = None) -> None:
+    def setup(
+        self,
+        stage: Optional[str] = None
+    ) -> None:
         """
         Sets up the datasets for the given stage.
 
@@ -66,7 +69,10 @@ class LowLightDataModule(L.LightningDataModule):
         self.bench_datasets = self._set_dataset(path=self.bench_dir)
         self.infer_datasets = self._set_dataset(path=self.infer_dir)
 
-    def _set_dataset(self, path: Path) -> List[LowLightDataset]:
+    def _set_dataset(
+        self,
+        path: Path
+    ) -> List[LowLightDataset]:
         """
         Creates a list of datasets from subdirectories in a given path.
 
@@ -89,18 +95,27 @@ class LowLightDataModule(L.LightningDataModule):
 
     @overload
     def _set_dataloader(
-        self, datasets: List[LowLightDataset], concat: Literal[True], shuffle: bool = False
+        self,
+        datasets: List[LowLightDataset],
+        concat: Literal[True],
+        shuffle: bool = False
     ) -> DataLoader:
         ...
 
     @overload
     def _set_dataloader(
-        self, datasets: List[LowLightDataset], concat: Literal[False] = False, shuffle: bool = False
+        self,
+        datasets: List[LowLightDataset],
+        concat: Literal[False] = False,
+        shuffle: bool = False
     ) -> List[DataLoader]:
         ...
 
     def _set_dataloader(
-        self, datasets: List[LowLightDataset], concat: bool = False, shuffle: bool = False
+        self,
+        datasets: List[LowLightDataset],
+        concat: bool = False,
+        shuffle: bool = False
     ) -> Union[DataLoader, List[DataLoader]]:
         """
         Creates a DataLoader or a list of DataLoaders from a list of datasets.
