@@ -186,3 +186,4 @@ data/database/*
 !data/database/*.gitkeep
 
 *.sh
+test/
